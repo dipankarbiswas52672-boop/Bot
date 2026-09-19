@@ -1,8 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
-const { exec } = require('child_process');
+const https = require('https');
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
 
 // Express Server for Render Health Check
 const app = express();
@@ -12,6 +10,7 @@ app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
 const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
+const BASE_HOST = "sms444.com";
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
@@ -20,92 +19,101 @@ const DEFAULT_USER_PASSWORD = "Abcd1234";
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
 
-const COOKIE_FILE = path.join(__dirname, 'cookies.txt');
-
 console.log("Telegram Bot Server Started...");
 
-// Helper: Run Native cURL Command via Shell
-function runCurl(command) {
+// Native HTTPS Request Function (Emulates cURL directly without shell spawn)
+function makeHttpRequest(path, method, payload, cookieHeader = '') {
     return new Promise((resolve, reject) => {
-        exec(command, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
-            if (error) {
-                return reject(error);
-            }
-            resolve(stdout);
+        const postData = JSON.stringify(payload);
+
+        const options = {
+            hostname: BASE_HOST,
+            port: 443,
+            path: path,
+            method: method,
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData),
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': `https://${BASE_HOST}/list/user`,
+                'Origin': `https://${BASE_HOST}`,
+                ...(cookieHeader ? { 'Cookie': cookieHeader } : {})
+            },
+            rejectUnauthorized: false
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
+            const setCookieHeader = res.headers['set-cookie'];
+
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => {
+                resolve({
+                    statusCode: res.statusCode,
+                    headers: res.headers,
+                    cookies: setCookieHeader ? setCookieHeader.map(c => c.split(';')[0]).join('; ') : '',
+                    body: data
+                });
+            });
         });
+
+        req.on('error', (e) => reject(e));
+        req.write(postData);
+        req.end();
     });
 }
 
-// 1. Agent Login using cURL (Saves session cookie to cookies.txt)
-async function loginAgentCurl() {
-    const curlCommand = `curl -s -k -X POST "https://ag.sms444.com/ag/exchange/login" \
-    -c "${COOKIE_FILE}" \
-    -H "Content-Type: application/json" \
-    -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-    -d "{\\"username\\":\\"${AGENT_USERNAME}\\",\\"password\\":\\"${AGENT_PASSWORD}\\"}"`;
-
+// Full Creation Logic with Auto-Increment Username Support
+async function createAccountSmart(requestedUsername, fullName, phoneNumber) {
     try {
-        const response = await runCurl(curlCommand);
-        return true;
-    } catch (err) {
-        console.error("cURL Login Error:", err.message);
-        return false;
-    }
-}
+        // 1. Agent Login
+        const loginPayload = { username: AGENT_USERNAME, password: AGENT_PASSWORD };
+        const loginRes = await makeHttpRequest('/ag/exchange/login', 'POST', loginPayload);
 
-// 2. User Creation using cURL with Cookie Session
-async function createAccountWithCurl(requestedUsername, fullName, phoneNumber) {
-    const loginSuccess = await loginAgentCurl();
-    if (!loginSuccess) return { success: false };
+        if (loginRes.statusCode !== 200 && !loginRes.cookies) {
+            console.error("Login Failed Body:", loginRes.body);
+            return { success: false };
+        }
 
-    let candidateUsername = requestedUsername;
-    let attempt = 0;
+        const sessionCookie = loginRes.cookies;
+        let candidateUsername = requestedUsername;
+        let attempt = 0;
 
-    while (attempt < 5) {
-        const payload = JSON.stringify({
-            username: candidateUsername,
-            name: fullName,
-            commission: "0",
-            openingBalance: "0",
-            exposureLimit: "5000",
-            creditReference: "0",
-            mobile: phoneNumber,
-            password: DEFAULT_USER_PASSWORD,
-            confirmPassword: DEFAULT_USER_PASSWORD,
-            masterPassword: MASTER_PASSWORD
-        });
+        // 2. Account Creation Loop with Auto Suffix if username exists
+        while (attempt < 5) {
+            const createPayload = {
+                username: candidateUsername,
+                name: fullName,
+                commission: "0",
+                openingBalance: "0",
+                exposureLimit: "5000",
+                creditReference: "0",
+                mobile: phoneNumber,
+                password: DEFAULT_USER_PASSWORD,
+                confirmPassword: DEFAULT_USER_PASSWORD,
+                masterPassword: MASTER_PASSWORD
+            };
 
-        // Escaping double quotes for Linux Shell
-        const escapedPayload = payload.replace(/"/g, '\\"');
+            const createRes = await makeHttpRequest('/ag/exchange/account/createAccount', 'POST', createPayload, sessionCookie);
 
-        const createCommand = `curl -s -k -X POST "https://ag.sms444.com/ag/exchange/account/createAccount" \
-        -b "${COOKIE_FILE}" \
-        -H "Content-Type: application/json" \
-        -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-        -d "${escapedPayload}"`;
-
-        try {
-            const rawResponse = await runCurl(createCommand);
-            
-            // Check success response
-            if (rawResponse.includes("success") || rawResponse.includes("200") || rawResponse.includes("created")) {
+            if (createRes.statusCode === 200 || createRes.body.includes("success")) {
                 return { success: true, finalUsername: candidateUsername };
             }
 
-            // If username is taken, try auto-increment suffix (e.g. Sourav121 -> Sourav12101)
+            // If status is 422/400 (Duplicate Username), increment suffix
             attempt++;
             candidateUsername = `${requestedUsername}${attempt < 10 ? '0' + attempt : attempt}`;
-
-        } catch (err) {
-            console.error("cURL Execution Error:", err.message);
-            break;
         }
-    }
 
-    return { success: false };
+        return { success: false };
+
+    } catch (error) {
+        console.error("Execution Failure:", error.message);
+        return { success: false };
+    }
 }
 
-// Telegram Message Handler
+// Bot Command Handlers
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -142,7 +150,7 @@ bot.on('message', async (msg) => {
 
         await bot.sendMessage(chatId, "Creating your account, please wait a moment... ⌛");
 
-        const result = await createAccountWithCurl(session.username, session.name, session.phone);
+        const result = await createAccountSmart(session.username, session.name, session.phone);
 
         if (result.success) {
             await bot.sendMessage(
