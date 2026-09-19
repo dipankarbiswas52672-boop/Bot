@@ -2,10 +2,10 @@ const TelegramBot = require('node-telegram-bot-api');
 const puppeteer = require('puppeteer');
 const express = require('express');
 
-// Dummy Express server for Render port binding
+// Express Server for Render Port Binding
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active with Firefox'));
+app.get('/', (req, res) => res.send('Bot Active with Firefox Engine'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
@@ -18,13 +18,12 @@ const DEFAULT_USER_PASSWORD = "Abcd1234";
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
 
-console.log("Telegram Bot Server Started with Firefox...");
+console.log("Telegram Bot Server Started with Firefox Engine...");
 
-// Puppeteer Account Creator using Firefox Engine
+// Puppeteer Account Creator via Firefox
 async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber) {
     let browser = null;
     try {
-        // Launching Puppeteer with Firefox Browser
         browser = await puppeteer.launch({
             browser: 'firefox',
             headless: true,
@@ -37,10 +36,9 @@ async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0');
 
-        // 1. Open Agent Login Page
+        // 1. Agent Login
         await page.goto('https://ag.sms444.com/ag/exchange/login', { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 2. Perform Login
         await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
         await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
 
@@ -49,27 +47,25 @@ async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber
             page.click('button[type="submit"]')
         ]);
 
-        // 3. Navigate to User Management
+        // 2. Open User Management Page
         await page.goto('https://ag.sms444.com/list/user', { waitUntil: 'networkidle2', timeout: 60000 });
 
         let candidateUsername = requestedUsername;
         let attempt = 0;
         let isSuccess = false;
 
-        // Loop to handle duplicate username automatically (e.g. Sourav121 -> Sourav12101)
+        // Loop to auto-increment duplicate usernames
         while (!isSuccess && attempt < 5) {
-            // Click "Add User" button
             const addButton = await page.$('button:has-text("Add User"), .add-user-btn');
             if (addButton) {
                 await addButton.click();
             } else {
-                // If modal not open, click trigger button
                 await page.click('.btn-primary');
             }
 
             await page.waitForTimeout(1500);
 
-            // Fill form fields
+            // Fill User Form
             await page.evaluate((u, n, p, pass, master) => {
                 const inputs = document.querySelectorAll('input');
                 inputs.forEach(input => {
@@ -93,7 +89,7 @@ async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber
 
             await page.waitForTimeout(2000);
 
-            // Check if submission succeeded or failed due to duplicate username
+            // Check if account created or username taken
             const errorToast = await page.$('.error-message, .toast-error, .alert-danger');
             if (!errorToast) {
                 isSuccess = true;
@@ -115,7 +111,7 @@ async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber
     }
 }
 
-// Telegram Flow
+// Telegram Setup
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -167,3 +163,4 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
+                
