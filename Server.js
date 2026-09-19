@@ -16,6 +16,9 @@ const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
+// Correct Domain URL Setup
+const BASE_URL = "https://sms444.com"; // Domain without 'ag.' prefix
+
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
 
@@ -27,10 +30,9 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         browser = await puppeteer.launch({
             args: [
                 ...chromium.args,
-                '--dns-server=1.1.1.1,8.8.8.8', // Bypass DNS issues on Cloud
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-web-security'
+                '--disable-dev-shm-usage'
             ],
             defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
@@ -38,12 +40,10 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         });
 
         const page = await browser.newPage();
-        
-        // Custom User-Agent to avoid blocking
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         // 1. Open Agent Login Page
-        await page.goto('https://ag.sms444.com/ag/exchange/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto(`${BASE_URL}/ag/exchange/login`, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         // 2. Perform Login
         await page.waitForSelector('input[name="username"], input[type="text"]', { timeout: 15000 });
@@ -56,7 +56,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         ]);
 
         // 3. Open User List Page
-        await page.goto('https://ag.sms444.com/list/user', { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(`${BASE_URL}/list/user`, { waitUntil: 'networkidle2', timeout: 60000 });
 
         let candidateUsername = requestedUsername;
         let attempt = 0;
@@ -117,7 +117,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
     }
 }
 
-// Telegram Setup
+// Telegram Handlers
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -159,7 +159,7 @@ bot.on('message', async (msg) => {
         if (result.success) {
             await bot.sendMessage(
                 chatId, 
-                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* https://sms444.com\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
+                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* ${BASE_URL}\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
                 { parse_mode: "Markdown" }
             );
         } else {
