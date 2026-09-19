@@ -1,6 +1,8 @@
 const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
+const { exec } = require('child_process');
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 
 // Express Server for Render Health Check
 const app = express();
@@ -10,12 +12,6 @@ app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
 const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
-
-// Correct Base URL without 'ag.' subdomain
-const BASE_URL = "https://sms444.com";
-const AGENT_LOGIN_URL = `${BASE_URL}/ag/exchange/login`;
-const CREATE_USER_URL = `${BASE_URL}/ag/exchange/account/createAccount`;
-
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
@@ -24,8 +20,92 @@ const DEFAULT_USER_PASSWORD = "Abcd1234";
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
 
+const COOKIE_FILE = path.join(__dirname, 'cookies.txt');
+
 console.log("Telegram Bot Server Started...");
 
+// Helper: Run Native cURL Command via Shell
+function runCurl(command) {
+    return new Promise((resolve, reject) => {
+        exec(command, { maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+            if (error) {
+                return reject(error);
+            }
+            resolve(stdout);
+        });
+    });
+}
+
+// 1. Agent Login using cURL (Saves session cookie to cookies.txt)
+async function loginAgentCurl() {
+    const curlCommand = `curl -s -k -X POST "https://ag.sms444.com/ag/exchange/login" \
+    -c "${COOKIE_FILE}" \
+    -H "Content-Type: application/json" \
+    -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+    -d "{\\"username\\":\\"${AGENT_USERNAME}\\",\\"password\\":\\"${AGENT_PASSWORD}\\"}"`;
+
+    try {
+        const response = await runCurl(curlCommand);
+        return true;
+    } catch (err) {
+        console.error("cURL Login Error:", err.message);
+        return false;
+    }
+}
+
+// 2. User Creation using cURL with Cookie Session
+async function createAccountWithCurl(requestedUsername, fullName, phoneNumber) {
+    const loginSuccess = await loginAgentCurl();
+    if (!loginSuccess) return { success: false };
+
+    let candidateUsername = requestedUsername;
+    let attempt = 0;
+
+    while (attempt < 5) {
+        const payload = JSON.stringify({
+            username: candidateUsername,
+            name: fullName,
+            commission: "0",
+            openingBalance: "0",
+            exposureLimit: "5000",
+            creditReference: "0",
+            mobile: phoneNumber,
+            password: DEFAULT_USER_PASSWORD,
+            confirmPassword: DEFAULT_USER_PASSWORD,
+            masterPassword: MASTER_PASSWORD
+        });
+
+        // Escaping double quotes for Linux Shell
+        const escapedPayload = payload.replace(/"/g, '\\"');
+
+        const createCommand = `curl -s -k -X POST "https://ag.sms444.com/ag/exchange/account/createAccount" \
+        -b "${COOKIE_FILE}" \
+        -H "Content-Type: application/json" \
+        -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+        -d "${escapedPayload}"`;
+
+        try {
+            const rawResponse = await runCurl(createCommand);
+            
+            // Check success response
+            if (rawResponse.includes("success") || rawResponse.includes("200") || rawResponse.includes("created")) {
+                return { success: true, finalUsername: candidateUsername };
+            }
+
+            // If username is taken, try auto-increment suffix (e.g. Sourav121 -> Sourav12101)
+            attempt++;
+            candidateUsername = `${requestedUsername}${attempt < 10 ? '0' + attempt : attempt}`;
+
+        } catch (err) {
+            console.error("cURL Execution Error:", err.message);
+            break;
+        }
+    }
+
+    return { success: false };
+}
+
+// Telegram Message Handler
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -62,7 +142,7 @@ bot.on('message', async (msg) => {
 
         await bot.sendMessage(chatId, "Creating your account, please wait a moment... ⌛");
 
-        const result = await createAccountSmart(session.username, session.name, session.phone);
+        const result = await createAccountWithCurl(session.username, session.name, session.phone);
 
         if (result.success) {
             await bot.sendMessage(
@@ -77,71 +157,3 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
-
-async function createAccountSmart(requestedUsername, fullName, phoneNumber) {
-    try {
-        const client = axios.create({
-            baseURL: BASE_URL,
-            withCredentials: true,
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': `${BASE_URL}/list/user`,
-                'Origin': BASE_URL
-            }
-        });
-
-        // 1. Authenticate Agent
-        const loginRes = await client.post('/ag/exchange/login', {
-            username: AGENT_USERNAME,
-            password: AGENT_PASSWORD
-        });
-
-        const cookies = loginRes.headers['set-cookie'];
-        const requestHeaders = cookies ? { 'Cookie': cookies.join('; ') } : {};
-
-        // 2. Try User Creation with Auto Suffix
-        let candidateUsername = requestedUsername;
-        let isSuccess = false;
-        let attempt = 0;
-
-        while (!isSuccess && attempt < 5) {
-            const payload = {
-                username: candidateUsername,
-                name: fullName,
-                commission: "0",
-                openingBalance: "0",
-                exposureLimit: "5000",
-                creditReference: "0",
-                mobile: phoneNumber,
-                password: DEFAULT_USER_PASSWORD,
-                confirmPassword: DEFAULT_USER_PASSWORD,
-                masterPassword: MASTER_PASSWORD
-            };
-
-            try {
-                const response = await client.post(CREATE_USER_URL, payload, { headers: requestHeaders });
-                
-                if (response.status === 200 || response.data.status === "success" || response.data.statusCode === 200) {
-                    isSuccess = true;
-                    return { success: true, finalUsername: candidateUsername };
-                }
-            } catch (err) {
-                if (err.response && (err.response.status === 422 || err.response.status === 400)) {
-                    attempt++;
-                    candidateUsername = `${requestedUsername}${attempt < 10 ? '0' + attempt : attempt}`;
-                } else {
-                    console.error("API Response Error:", err.response ? err.response.data : err.message);
-                    break;
-                }
-            }
-        }
-
-        return { success: false };
-
-    } catch (error) {
-        console.error("Agent Session Failure:", error.message);
-        return { success: false };
-    }
-            }
-                
