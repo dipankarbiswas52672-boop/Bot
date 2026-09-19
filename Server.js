@@ -1,11 +1,12 @@
 const TelegramBot = require('node-telegram-bot-api');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 const express = require('express');
 
 // Express Server for Render Health Check
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active with Chrome Headless Shell'));
+app.get('/', (req, res) => res.send('Bot Active with Sparticuz Chromium'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
@@ -20,19 +21,15 @@ const userSessions = {};
 
 console.log("Telegram Bot Server Started...");
 
-// Puppeteer Automation with exact installed binary path
+// Fast Automation with Sparticuz Chromium
 async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumber) {
     let browser = null;
     try {
         browser = await puppeteer.launch({
-            headless: "new",
-            executablePath: '/opt/render/project/src/.cache/puppeteer/chrome-headless-shell/linux-121.0.6167.85/chrome-headless-shell-linux64/chrome-headless-shell',
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--single-process'
-            ]
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless,
         });
 
         const page = await browser.newPage();
@@ -41,7 +38,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         // 1. Open Agent Login Page
         await page.goto('https://ag.sms444.com/ag/exchange/login', { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 2. Perform Login
+        // 2. Login
         await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
         await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
 
@@ -50,14 +47,13 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
             page.click('button[type="submit"]')
         ]);
 
-        // 3. Navigate to User List Page
+        // 3. Open User List Page
         await page.goto('https://ag.sms444.com/list/user', { waitUntil: 'networkidle2', timeout: 60000 });
 
         let candidateUsername = requestedUsername;
         let attempt = 0;
         let isSuccess = false;
 
-        // Loop to auto-increment username if duplicate occurs
         while (!isSuccess && attempt < 5) {
             const addButton = await page.$('button:has-text("Add User"), .add-user-btn');
             if (addButton) {
@@ -107,13 +103,13 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         return { success: false };
 
     } catch (err) {
-        console.error("Puppeteer Automation Error:", err.message);
+        console.error("Automation Error:", err.message);
         if (browser) await browser.close();
         return { success: false };
     }
 }
 
-// Telegram Bot Handlers
+// Telegram Handlers
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
