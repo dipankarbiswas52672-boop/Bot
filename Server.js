@@ -2,25 +2,57 @@ const TelegramBot = require('node-telegram-bot-api');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const express = require('express');
+const https = require('https');
 
-// Express Server for Render Health Check
+// Express Server for Render
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active with Fallback Domains'));
+app.get('/', (req, res) => res.send('Bot Active'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
-// Credentials Setup
+// Configuration
 const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-// Both Domain URLs for Automatic Fallback
-const DOMAINS = [
-    "https://ag.sms444.com",
-    "https://sms444.com"
-];
+const TARGET_HOST = "ag.sms444.com";
+
+// Resolve Domain IP using Cloudflare DoH
+function resolveIP(hostname) {
+    return new Promise((resolve, reject) => {
+        const options = {
+            hostname: '1.1.1.1',
+            port: 443,
+            path: `/dns-query?name=${hostname}&type=A`,
+            method: 'GET',
+            headers: {
+                'accept': 'application/dns-json'
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(data);
+                    if (json.Answer && json.Answer.length > 0) {
+                        resolve(json.Answer[0].data);
+                    } else {
+                        reject(new Error("IP not found in DNS response"));
+                    }
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+
+        req.on('error', (e) => reject(e));
+        req.end();
+    });
+}
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
@@ -30,15 +62,27 @@ console.log("Telegram Bot Server Started...");
 async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumber) {
     let browser = null;
     try {
+        // Resolve Domain IP dynamically
+        let resolvedIP = null;
+        try {
+            resolvedIP = await resolveIP(TARGET_HOST);
+            console.log(`Resolved ${TARGET_HOST} to IP: ${resolvedIP}`);
+        } catch (dnsErr) {
+            console.log("DoH failed, falling back to direct domain:", dnsErr.message);
+        }
+
+        const hostRules = resolvedIP ? `--host-rules=MAP ${TARGET_HOST} ${resolvedIP}` : '';
+
         browser = await puppeteer.launch({
             args: [
                 ...chromium.args,
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-web-security',
-                '--ignore-certificate-errors'
-            ],
+                '--ignore-certificate-errors',
+                '--enable-features=NetworkService',
+                hostRules
+            ].filter(Boolean),
             defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
             headless: chromium.headless,
@@ -47,36 +91,23 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-        let activeDomain = null;
-
-        // Try DOMAINS sequentially to bypass DNS/Resolution Errors
-        for (const domain of DOMAINS) {
-            try {
-                console.log(`Trying domain: ${domain}`);
-                await page.goto(`${domain}/ag/exchange/login`, { waitUntil: 'domcontentloaded', timeout: 25000 });
-                activeDomain = domain;
-                break;
-            } catch (err) {
-                console.log(`Failed to connect to ${domain}: ${err.message}`);
-            }
-        }
-
-        if (!activeDomain) {
-            throw new Error("ERR_NAME_NOT_RESOLVED on all domains");
-        }
-
         // Login Process
+        const loginUrl = `https://${TARGET_HOST}/ag/exchange/login`;
+        console.log(`Navigating to: ${loginUrl}`);
+        
+        await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
         await page.waitForSelector('input[name="username"], input[type="text"]', { timeout: 15000 });
         await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
         await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
 
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 40000 }).catch(() => {}),
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {}),
             page.click('button[type="submit"]')
         ]);
 
         // Navigate to User List
-        await page.goto(`${activeDomain}/list/user`, { waitUntil: 'networkidle2', timeout: 40000 });
+        await page.goto(`https://${TARGET_HOST}/list/user`, { waitUntil: 'networkidle2', timeout: 60000 });
 
         let candidateUsername = requestedUsername;
         let attempt = 0;
@@ -92,7 +123,6 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
 
             await page.waitForTimeout(1500);
 
-            // Fill Form Fields
             await page.evaluate((u, n, p, pass, master) => {
                 const inputs = document.querySelectorAll('input');
                 inputs.forEach(input => {
@@ -110,7 +140,6 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
                 });
             }, candidateUsername, fullName, phoneNumber, DEFAULT_USER_PASSWORD, MASTER_PASSWORD);
 
-            // Submit Form
             const submitBtn = await page.$('button[type="submit"], .modal-footer button');
             if (submitBtn) await submitBtn.click();
 
@@ -137,7 +166,6 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
     }
 }
 
-// Telegram Flow
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -179,7 +207,7 @@ bot.on('message', async (msg) => {
         if (result.success) {
             await bot.sendMessage(
                 chatId, 
-                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* https://sms444.com\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
+                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* https://${TARGET_HOST}\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
                 { parse_mode: "Markdown" }
             );
         } else {
