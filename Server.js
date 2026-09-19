@@ -2,57 +2,23 @@ const TelegramBot = require('node-telegram-bot-api');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const express = require('express');
-const https = require('https');
 
-// Express Server for Render
+// Express Server for Render Health Check
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active'));
+app.get('/', (req, res) => res.send('Bot Active via Direct IP'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
-// Configuration
+// Credentials Setup
 const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-const TARGET_HOST = "ag.sms444.com";
-
-// Resolve Domain IP using Cloudflare DoH
-function resolveIP(hostname) {
-    return new Promise((resolve, reject) => {
-        const options = {
-            hostname: '1.1.1.1',
-            port: 443,
-            path: `/dns-query?name=${hostname}&type=A`,
-            method: 'GET',
-            headers: {
-                'accept': 'application/dns-json'
-            }
-        };
-
-        const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try {
-                    const json = JSON.parse(data);
-                    if (json.Answer && json.Answer.length > 0) {
-                        resolve(json.Answer[0].data);
-                    } else {
-                        reject(new Error("IP not found in DNS response"));
-                    }
-                } catch (e) {
-                    reject(e);
-                }
-            });
-        });
-
-        req.on('error', (e) => reject(e));
-        req.end();
-    });
-}
+// Direct Server IP & Host Config
+const SERVER_IP = "43.204.42.19";
+const DOMAIN = "ag.sms444.com";
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
@@ -62,17 +28,6 @@ console.log("Telegram Bot Server Started...");
 async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumber) {
     let browser = null;
     try {
-        // Resolve Domain IP dynamically
-        let resolvedIP = null;
-        try {
-            resolvedIP = await resolveIP(TARGET_HOST);
-            console.log(`Resolved ${TARGET_HOST} to IP: ${resolvedIP}`);
-        } catch (dnsErr) {
-            console.log("DoH failed, falling back to direct domain:", dnsErr.message);
-        }
-
-        const hostRules = resolvedIP ? `--host-rules=MAP ${TARGET_HOST} ${resolvedIP}` : '';
-
         browser = await puppeteer.launch({
             args: [
                 ...chromium.args,
@@ -80,22 +35,24 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--ignore-certificate-errors',
-                '--enable-features=NetworkService',
-                hostRules
-            ].filter(Boolean),
+                `--host-rules=MAP ${DOMAIN} ${SERVER_IP}` // Bypasses Render DNS resolution completely
+            ],
             defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
             headless: chromium.headless,
         });
 
         const page = await browser.newPage();
+        
+        await page.setExtraHTTPHeaders({
+            'Host': DOMAIN
+        });
+
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-        // Login Process
-        const loginUrl = `https://${TARGET_HOST}/ag/exchange/login`;
-        console.log(`Navigating to: ${loginUrl}`);
-        
-        await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        // 1. Login to Agent Panel using IP-mapped Host
+        console.log(`Navigating to https://${DOMAIN}/ag/exchange/login...`);
+        await page.goto(`https://${DOMAIN}/ag/exchange/login`, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         await page.waitForSelector('input[name="username"], input[type="text"]', { timeout: 15000 });
         await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
@@ -106,8 +63,8 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
             page.click('button[type="submit"]')
         ]);
 
-        // Navigate to User List
-        await page.goto(`https://${TARGET_HOST}/list/user`, { waitUntil: 'networkidle2', timeout: 60000 });
+        // 2. Open User Management Page
+        await page.goto(`https://${DOMAIN}/list/user`, { waitUntil: 'networkidle2', timeout: 60000 });
 
         let candidateUsername = requestedUsername;
         let attempt = 0;
@@ -123,6 +80,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
 
             await page.waitForTimeout(1500);
 
+            // Fill Form
             await page.evaluate((u, n, p, pass, master) => {
                 const inputs = document.querySelectorAll('input');
                 inputs.forEach(input => {
@@ -140,6 +98,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
                 });
             }, candidateUsername, fullName, phoneNumber, DEFAULT_USER_PASSWORD, MASTER_PASSWORD);
 
+            // Submit Form
             const submitBtn = await page.$('button[type="submit"], .modal-footer button');
             if (submitBtn) await submitBtn.click();
 
@@ -166,6 +125,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
     }
 }
 
+// Telegram Bot Logic
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -207,7 +167,7 @@ bot.on('message', async (msg) => {
         if (result.success) {
             await bot.sendMessage(
                 chatId, 
-                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* https://${TARGET_HOST}\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
+                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* https://sms444.com\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
                 { parse_mode: "Markdown" }
             );
         } else {
