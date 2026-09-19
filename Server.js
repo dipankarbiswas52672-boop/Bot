@@ -10,8 +10,11 @@ app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
 const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
-const AGENT_LOGIN_URL = "https://ag.sms444.com/ag/exchange/login";
-const CREATE_USER_URL = "https://ag.sms444.com/ag/exchange/account/createAccount";
+
+// Correct Base URL without 'ag.' subdomain
+const BASE_URL = "https://sms444.com";
+const AGENT_LOGIN_URL = `${BASE_URL}/ag/exchange/login`;
+const CREATE_USER_URL = `${BASE_URL}/ag/exchange/account/createAccount`;
 
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
@@ -43,19 +46,16 @@ bot.on('message', async (msg) => {
 
     const session = userSessions[chatId];
 
-    // Step 1: Collect Name
     if (session.step === 1) {
         session.name = text;
         session.step = 2;
         await bot.sendMessage(chatId, `Thanks *${text}*!\n\nNow enter your preferred *Username*:`, { parse_mode: "Markdown" });
     } 
-    // Step 2: Collect Username
     else if (session.step === 2) {
         session.username = text;
         session.step = 3;
         await bot.sendMessage(chatId, "Got it! Now enter your *10-digit Mobile Number*:");
     } 
-    // Step 3: Collect Mobile & Register
     else if (session.step === 3) {
         session.phone = text;
         session.step = 4;
@@ -78,15 +78,16 @@ bot.on('message', async (msg) => {
     }
 });
 
-// Function to handle login, unique username verification, and user creation
 async function createAccountSmart(requestedUsername, fullName, phoneNumber) {
     try {
         const client = axios.create({
-            baseURL: 'https://ag.sms444.com',
+            baseURL: BASE_URL,
             withCredentials: true,
             headers: {
                 'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': `${BASE_URL}/list/user`,
+                'Origin': BASE_URL
             }
         });
 
@@ -99,7 +100,7 @@ async function createAccountSmart(requestedUsername, fullName, phoneNumber) {
         const cookies = loginRes.headers['set-cookie'];
         const requestHeaders = cookies ? { 'Cookie': cookies.join('; ') } : {};
 
-        // 2. Auto-Increment Username logic if requested username already exists
+        // 2. Try User Creation with Auto Suffix
         let candidateUsername = requestedUsername;
         let isSuccess = false;
         let attempt = 0;
@@ -121,17 +122,16 @@ async function createAccountSmart(requestedUsername, fullName, phoneNumber) {
             try {
                 const response = await client.post(CREATE_USER_URL, payload, { headers: requestHeaders });
                 
-                if (response.status === 200 || response.data.status === "success") {
+                if (response.status === 200 || response.data.status === "success" || response.data.statusCode === 200) {
                     isSuccess = true;
                     return { success: true, finalUsername: candidateUsername };
                 }
             } catch (err) {
-                // Status 422 usually indicates validation failure or existing username
                 if (err.response && (err.response.status === 422 || err.response.status === 400)) {
                     attempt++;
                     candidateUsername = `${requestedUsername}${attempt < 10 ? '0' + attempt : attempt}`;
                 } else {
-                    console.error("API Connection Error:", err.message);
+                    console.error("API Response Error:", err.response ? err.response.data : err.message);
                     break;
                 }
             }
@@ -143,4 +143,5 @@ async function createAccountSmart(requestedUsername, fullName, phoneNumber) {
         console.error("Agent Session Failure:", error.message);
         return { success: false };
     }
-          }
+            }
+                
