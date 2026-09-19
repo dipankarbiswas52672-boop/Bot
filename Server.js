@@ -3,14 +3,14 @@ const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const express = require('express');
 
-// Express Server for Render
+// Express Server for Render Health Check
 const app = express();
 const PORT = process.env.PORT || 10000;
 app.get('/', (req, res) => res.send('Bot Active via Direct Server IP'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
-// Credentials Setup
-const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
+// Updated Credentials Setup
+const TELEGRAM_TOKEN = "8981609410:AAHSMnYzWmSUDuGmcZ-3IVGKGz3vB3Hosl0";
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
