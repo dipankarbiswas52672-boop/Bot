@@ -6,18 +6,19 @@ const express = require('express');
 // Express Server for Render Health Check
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active via Direct Server IP'));
+app.get('/', (req, res) => res.send('Bot Active via Internal DNS Mapping'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
-// Updated Credentials Setup
+// Credentials Setup
 const TELEGRAM_TOKEN = "8981609410:AAHSMnYzWmSUDuGmcZ-3IVGKGz3vB3Hosl0";
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-// Direct Server IP Configuration
+// Direct Server IP & Host Configuration
 const SERVER_IP = "43.204.42.19";
+const DOMAIN = "ag.sms444.com";
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
@@ -34,7 +35,8 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--ignore-certificate-errors',
-                '--disable-web-security'
+                '--disable-web-security',
+                `--host-resolver-rules=MAP ${DOMAIN}${SERVER_IP}` // Internal Chrome DNS Resolution Fix
             ],
             defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
@@ -42,20 +44,15 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         });
 
         const page = await browser.newPage();
-
-        // Pass host header to reach the correct vhost on server
-        await page.setExtraHTTPHeaders({
-            'Host': 'ag.sms444.com'
-        });
-
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-        // 1. Direct Login via IP
-        const targetUrl = `https://${SERVER_IP}/ag/exchange/login`;
-        console.log(`Connecting directly to: ${targetUrl}`);
+        // 1. Open Agent Login Page using Domain
+        const targetUrl = `https://${DOMAIN}/ag/exchange/login`;
+        console.log(`Connecting via mapped domain: ${targetUrl}`);
         
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
+        // 2. Perform Login
         await page.waitForSelector('input[name="username"], input[type="text"]', { timeout: 15000 });
         await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
         await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
@@ -65,8 +62,8 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
             page.click('button[type="submit"]')
         ]);
 
-        // 2. Open User Management Page via IP
-        await page.goto(`https://${SERVER_IP}/list/user`, { waitUntil: 'networkidle2', timeout: 60000 });
+        // 3. Open User List Page
+        await page.goto(`https://${DOMAIN}/list/user`, { waitUntil: 'networkidle2', timeout: 60000 });
 
         let candidateUsername = requestedUsername;
         let attempt = 0;
@@ -82,7 +79,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
 
             await page.waitForTimeout(1500);
 
-            // Fill Form
+            // Fill Form Fields
             await page.evaluate((u, n, p, pass, master) => {
                 const inputs = document.querySelectorAll('input');
                 inputs.forEach(input => {
@@ -127,7 +124,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
     }
 }
 
-// Telegram Handlers
+// Telegram Flow Handlers
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
