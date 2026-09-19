@@ -1,8 +1,8 @@
 const TelegramBot = require('node-telegram-bot-api');
-const https = require('https');
+const puppeteer = require('puppeteer');
 const express = require('express');
 
-// Express Server for Render Health Check
+// Express Server for Render Port
 const app = express();
 const PORT = process.env.PORT || 10000;
 app.get('/', (req, res) => res.send('Bot Active'));
@@ -10,7 +10,6 @@ app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
 const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
-const BASE_HOST = "sms444.com";
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
@@ -21,99 +20,97 @@ const userSessions = {};
 
 console.log("Telegram Bot Server Started...");
 
-// Native HTTPS Request Function (Emulates cURL directly without shell spawn)
-function makeHttpRequest(path, method, payload, cookieHeader = '') {
-    return new Promise((resolve, reject) => {
-        const postData = JSON.stringify(payload);
-
-        const options = {
-            hostname: BASE_HOST,
-            port: 443,
-            path: path,
-            method: method,
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData),
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': `https://${BASE_HOST}/list/user`,
-                'Origin': `https://${BASE_HOST}`,
-                ...(cookieHeader ? { 'Cookie': cookieHeader } : {})
-            },
-            rejectUnauthorized: false
-        };
-
-        const req = https.request(options, (res) => {
-            let data = '';
-            const setCookieHeader = res.headers['set-cookie'];
-
-            res.on('data', (chunk) => { data += chunk; });
-            res.on('end', () => {
-                resolve({
-                    statusCode: res.statusCode,
-                    headers: res.headers,
-                    cookies: setCookieHeader ? setCookieHeader.map(c => c.split(';')[0]).join('; ') : '',
-                    body: data
-                });
-            });
+// Puppeteer Automation Function
+async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumber) {
+    let browser = null;
+    try {
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--single-process'
+            ]
         });
 
-        req.on('error', (e) => reject(e));
-        req.write(postData);
-        req.end();
-    });
-}
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-// Full Creation Logic with Auto-Increment Username Support
-async function createAccountSmart(requestedUsername, fullName, phoneNumber) {
-    try {
-        // 1. Agent Login
-        const loginPayload = { username: AGENT_USERNAME, password: AGENT_PASSWORD };
-        const loginRes = await makeHttpRequest('/ag/exchange/login', 'POST', loginPayload);
+        // 1. Open Agent Login Page
+        await page.goto('https://ag.sms444.com/login', { waitUntil: 'networkidle2', timeout: 60000 });
 
-        if (loginRes.statusCode !== 200 && !loginRes.cookies) {
-            console.error("Login Failed Body:", loginRes.body);
-            return { success: false };
-        }
+        // 2. Login
+        await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
+        await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
+        
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+            page.click('button[type="submit"]')
+        ]);
 
-        const sessionCookie = loginRes.cookies;
+        // 3. Go to Add User Page
+        await page.goto('https://ag.sms444.com/list/user', { waitUntil: 'networkidle2', timeout: 60000 });
+
+        // 4. Handle Modal & Fill Form with Auto-Increment Username logic
         let candidateUsername = requestedUsername;
         let attempt = 0;
+        let isSuccess = false;
 
-        // 2. Account Creation Loop with Auto Suffix if username exists
-        while (attempt < 5) {
-            const createPayload = {
-                username: candidateUsername,
-                name: fullName,
-                commission: "0",
-                openingBalance: "0",
-                exposureLimit: "5000",
-                creditReference: "0",
-                mobile: phoneNumber,
-                password: DEFAULT_USER_PASSWORD,
-                confirmPassword: DEFAULT_USER_PASSWORD,
-                masterPassword: MASTER_PASSWORD
-            };
+        while (!isSuccess && attempt < 5) {
+            // Open Add User Modal if not already open
+            const addButton = await page.$('button:has-text("Add User"), .add-user-btn, button.btn-primary');
+            if (addButton) await addButton.click();
 
-            const createRes = await makeHttpRequest('/ag/exchange/account/createAccount', 'POST', createPayload, sessionCookie);
+            await page.waitForTimeout(1000);
 
-            if (createRes.statusCode === 200 || createRes.body.includes("success")) {
+            // Fill User Form
+            await page.evaluate((u, n, p, pass, master) => {
+                const inputs = document.querySelectorAll('input');
+                inputs.forEach(input => {
+                    const placeholder = (input.placeholder || '').toLowerCase();
+                    const nameAttr = (input.name || '').toLowerCase();
+                    
+                    if (nameAttr.includes('user') || placeholder.includes('username')) input.value = u;
+                    if (nameAttr.includes('name') || placeholder.includes('name')) input.value = n;
+                    if (nameAttr.includes('mobile') || placeholder.includes('mobile')) input.value = p;
+                    if (nameAttr.includes('password') && !nameAttr.includes('master')) input.value = pass;
+                    if (nameAttr.includes('confirm')) input.value = pass;
+                    if (nameAttr.includes('master')) input.value = master;
+
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                });
+            }, candidateUsername, fullName, phoneNumber, DEFAULT_USER_PASSWORD, MASTER_PASSWORD);
+
+            // Submit Form
+            const submitBtn = await page.$('button[type="submit"], .modal-footer button.btn-primary');
+            if (submitBtn) await submitBtn.click();
+
+            await page.waitForTimeout(2000);
+
+            // Check if error/duplicate username exists
+            const errorElement = await page.$('.error-message, .toast-error, .alert-danger');
+            if (!errorElement) {
+                isSuccess = true;
+                await browser.close();
                 return { success: true, finalUsername: candidateUsername };
             }
 
-            // If status is 422/400 (Duplicate Username), increment suffix
             attempt++;
             candidateUsername = `${requestedUsername}${attempt < 10 ? '0' + attempt : attempt}`;
         }
 
+        await browser.close();
         return { success: false };
 
-    } catch (error) {
-        console.error("Execution Failure:", error.message);
+    } catch (err) {
+        console.error("Puppeteer Execution Error:", err.message);
+        if (browser) await browser.close();
         return { success: false };
     }
 }
 
-// Bot Command Handlers
+// Telegram Handlers
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -150,7 +147,7 @@ bot.on('message', async (msg) => {
 
         await bot.sendMessage(chatId, "Creating your account, please wait a moment... ⌛");
 
-        const result = await createAccountSmart(session.username, session.name, session.phone);
+        const result = await createAccountWithPuppeteer(session.username, session.name, session.phone);
 
         if (result.success) {
             await bot.sendMessage(
@@ -165,3 +162,4 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
+                
