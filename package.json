@@ -1,14 +1,14 @@
 {
   "name": "telegram-bot",
   "version": "1.0.0",
-  "description": "Telegram Automation Bot for SMS444",
+  "description": "SMS444 Bot",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.6.0",
     "express": "^4.18.2",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "puppeteer": "^21.5.0"
   }
 }
