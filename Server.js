@@ -82,30 +82,43 @@ bot.on('message', async (msg) => {
 async function createCasinoAccount(userData) {
     let browser;
     try {
+        console.log("Launching Puppeteer Browser on Render...");
         browser = await puppeteer.launch({
             headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--single-process',
+                '--no-zygote'
+            ]
         });
 
         const page = await browser.newPage();
-        await page.goto(AGENT_LOGIN_URL, { waitUntil: 'networkidle2' });
+        await page.setViewport({ width: 1280, height: 800 });
+
+        console.log("Navigating to Agent Login Page...");
+        await page.goto(AGENT_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
         // 1. Login to Agent Panel
-        await page.waitForSelector('input[placeholder="Username"]');
+        await page.waitForSelector('input[placeholder="Username"]', { timeout: 20000 });
         await page.type('input[placeholder="Username"]', AGENT_USERNAME);
         await page.type('input[placeholder="Password"]', AGENT_PASSWORD);
-        
+
+        console.log("Submitting Login...");
         await Promise.all([
             page.click('button[type="submit"], button:has-text("Login")'),
-            page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {})
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
         ]);
 
         // 2. Open Add User Modal
-        await page.waitForSelector('button:has-text("Add User"), .btn:has-text("Add User")', { timeout: 15000 });
+        console.log("Opening Add User Modal...");
+        await page.waitForSelector('button:has-text("Add User"), .btn:has-text("Add User")', { timeout: 20000 });
         await page.click('button:has-text("Add User"), .btn:has-text("Add User")');
 
         // 3. Fill Form Fields
-        await page.waitForSelector('input[placeholder="Username.."]', { timeout: 10000 });
+        console.log("Filling Form Data...");
+        await page.waitForSelector('input[placeholder="Username.."]', { timeout: 20000 });
 
         await page.type('input[placeholder="Username.."]', userData.username);
         await page.type('input[placeholder="Name.."]', userData.name);
@@ -119,16 +132,17 @@ async function createCasinoAccount(userData) {
         await page.type('input[placeholder="Master Password.."]', MASTER_PASSWORD);
 
         // 4. Submit Form
+        console.log("Submitting Account Creation...");
         await page.click('button:has-text("Create")');
-        await new Promise(r => setTimeout(r, 4000));
+        await new Promise(r => setTimeout(r, 5000));
 
+        console.log("Account Creation Completed Successfully!");
         await browser.close();
         return true;
 
     } catch (error) {
-        console.error("Puppeteer Automation Error:", error);
+        console.error("Puppeteer Automation Failed with Error:", error.message);
         if (browser) await browser.close();
         return false;
     }
-    }
-  
+}
