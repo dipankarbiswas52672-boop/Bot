@@ -6,6 +6,7 @@ const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
 
 // Agent Site Credentials
 const AGENT_LOGIN_URL = "https://ag.sms444.com/";
+const ADD_USER_URL = "https://ag.sms444.com/list/user";
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
@@ -82,7 +83,7 @@ bot.on('message', async (msg) => {
 async function createCasinoAccount(userData) {
     let browser;
     try {
-        console.log("Launching Puppeteer Browser on Render...");
+        console.log("Launching Puppeteer Browser...");
         browser = await puppeteer.launch({
             headless: "new",
             args: [
@@ -97,7 +98,7 @@ async function createCasinoAccount(userData) {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
 
-        console.log("Navigating to Agent Login Page...");
+        console.log("Navigating to Agent Login...");
         await page.goto(AGENT_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
         // 1. Login to Agent Panel
@@ -111,12 +112,16 @@ async function createCasinoAccount(userData) {
             page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
         ]);
 
-        // 2. Open Add User Modal
+        // 2. Direct Navigate to User List Page
+        console.log("Navigating to User List Page...");
+        await page.goto(ADD_USER_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+
+        // 3. Open Add User Modal
         console.log("Opening Add User Modal...");
         await page.waitForSelector('button:has-text("Add User"), .btn:has-text("Add User")', { timeout: 20000 });
         await page.click('button:has-text("Add User"), .btn:has-text("Add User")');
 
-        // 3. Fill Form Fields
+        // 4. Fill Form Fields
         console.log("Filling Form Data...");
         await page.waitForSelector('input[placeholder="Username.."]', { timeout: 20000 });
 
@@ -129,11 +134,16 @@ async function createCasinoAccount(userData) {
         await page.type('input[placeholder="Mobile Number.."]', userData.phone);
         await page.type('input[placeholder="Password.."]', userData.userPassword);
         await page.type('input[placeholder="Confirm Password.."]', userData.userPassword);
-        await page.type('input[placeholder="Master Password.."]', MASTER_PASSWORD);
 
-        // 4. Submit Form
+        // Fill Master Password field if present in form
+        const masterPassInput = await page.$('input[placeholder="Master Password.."]');
+        if (masterPassInput) {
+            await page.type('input[placeholder="Master Password.."]', MASTER_PASSWORD);
+        }
+
+        // 5. Submit Form
         console.log("Submitting Account Creation...");
-        await page.click('button:has-text("Create")');
+        await page.click('button:has-text("Create"), button:has-text("Submit"), button[type="submit"]');
         await new Promise(r => setTimeout(r, 5000));
 
         console.log("Account Creation Completed Successfully!");
