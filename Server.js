@@ -6,18 +6,21 @@ const express = require('express');
 // Express Server for Render Health Check
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active'));
+app.get('/', (req, res) => res.send('Bot Active with Fallback Domains'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
-// Configuration
+// Credentials Setup
 const TELEGRAM_TOKEN = "8981609410:AAF81-mFylHCBC_0ri3SHHIvZjPTM-KN13Y";
 const AGENT_USERNAME = "Bro090";
 const AGENT_PASSWORD = "Sourav123";
 const MASTER_PASSWORD = "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-// Correct Domain URL Setup
-const BASE_URL = "https://sms444.com"; // Domain without 'ag.' prefix
+// Both Domain URLs for Automatic Fallback
+const DOMAINS = [
+    "https://ag.sms444.com",
+    "https://sms444.com"
+];
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
@@ -32,7 +35,9 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
                 ...chromium.args,
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage'
+                '--disable-dev-shm-usage',
+                '--disable-web-security',
+                '--ignore-certificate-errors'
             ],
             defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
@@ -42,21 +47,36 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-        // 1. Open Agent Login Page
-        await page.goto(`${BASE_URL}/ag/exchange/login`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        let activeDomain = null;
 
-        // 2. Perform Login
+        // Try DOMAINS sequentially to bypass DNS/Resolution Errors
+        for (const domain of DOMAINS) {
+            try {
+                console.log(`Trying domain: ${domain}`);
+                await page.goto(`${domain}/ag/exchange/login`, { waitUntil: 'domcontentloaded', timeout: 25000 });
+                activeDomain = domain;
+                break;
+            } catch (err) {
+                console.log(`Failed to connect to ${domain}: ${err.message}`);
+            }
+        }
+
+        if (!activeDomain) {
+            throw new Error("ERR_NAME_NOT_RESOLVED on all domains");
+        }
+
+        // Login Process
         await page.waitForSelector('input[name="username"], input[type="text"]', { timeout: 15000 });
         await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
         await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
 
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {}),
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 40000 }).catch(() => {}),
             page.click('button[type="submit"]')
         ]);
 
-        // 3. Open User List Page
-        await page.goto(`${BASE_URL}/list/user`, { waitUntil: 'networkidle2', timeout: 60000 });
+        // Navigate to User List
+        await page.goto(`${activeDomain}/list/user`, { waitUntil: 'networkidle2', timeout: 40000 });
 
         let candidateUsername = requestedUsername;
         let attempt = 0;
@@ -117,7 +137,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
     }
 }
 
-// Telegram Handlers
+// Telegram Flow
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -159,7 +179,7 @@ bot.on('message', async (msg) => {
         if (result.success) {
             await bot.sendMessage(
                 chatId, 
-                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* ${BASE_URL}\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
+                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* https://sms444.com\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
                 { parse_mode: "Markdown" }
             );
         } else {
