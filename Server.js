@@ -2,10 +2,10 @@ const TelegramBot = require('node-telegram-bot-api');
 const puppeteer = require('puppeteer');
 const express = require('express');
 
-// Express Server for Render Port
+// Dummy Express server for Render port binding
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active'));
+app.get('/', (req, res) => res.send('Bot Active with Firefox'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
@@ -18,59 +18,64 @@ const DEFAULT_USER_PASSWORD = "Abcd1234";
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
 
-console.log("Telegram Bot Server Started...");
+console.log("Telegram Bot Server Started with Firefox...");
 
-// Puppeteer Automation Function
-async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumber) {
+// Puppeteer Account Creator using Firefox Engine
+async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber) {
     let browser = null;
     try {
+        // Launching Puppeteer with Firefox Browser
         browser = await puppeteer.launch({
-            headless: "new",
+            browser: 'firefox',
+            headless: true,
             args: [
                 '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--single-process'
+                '--disable-setuid-sandbox'
             ]
         });
 
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0');
 
         // 1. Open Agent Login Page
-        await page.goto('https://ag.sms444.com/login', { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto('https://ag.sms444.com/ag/exchange/login', { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 2. Login
+        // 2. Perform Login
         await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
         await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
-        
+
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
             page.click('button[type="submit"]')
         ]);
 
-        // 3. Go to Add User Page
+        // 3. Navigate to User Management
         await page.goto('https://ag.sms444.com/list/user', { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 4. Handle Modal & Fill Form with Auto-Increment Username logic
         let candidateUsername = requestedUsername;
         let attempt = 0;
         let isSuccess = false;
 
+        // Loop to handle duplicate username automatically (e.g. Sourav121 -> Sourav12101)
         while (!isSuccess && attempt < 5) {
-            // Open Add User Modal if not already open
-            const addButton = await page.$('button:has-text("Add User"), .add-user-btn, button.btn-primary');
-            if (addButton) await addButton.click();
+            // Click "Add User" button
+            const addButton = await page.$('button:has-text("Add User"), .add-user-btn');
+            if (addButton) {
+                await addButton.click();
+            } else {
+                // If modal not open, click trigger button
+                await page.click('.btn-primary');
+            }
 
-            await page.waitForTimeout(1000);
+            await page.waitForTimeout(1500);
 
-            // Fill User Form
+            // Fill form fields
             await page.evaluate((u, n, p, pass, master) => {
                 const inputs = document.querySelectorAll('input');
                 inputs.forEach(input => {
                     const placeholder = (input.placeholder || '').toLowerCase();
                     const nameAttr = (input.name || '').toLowerCase();
-                    
+
                     if (nameAttr.includes('user') || placeholder.includes('username')) input.value = u;
                     if (nameAttr.includes('name') || placeholder.includes('name')) input.value = n;
                     if (nameAttr.includes('mobile') || placeholder.includes('mobile')) input.value = p;
@@ -83,14 +88,14 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
             }, candidateUsername, fullName, phoneNumber, DEFAULT_USER_PASSWORD, MASTER_PASSWORD);
 
             // Submit Form
-            const submitBtn = await page.$('button[type="submit"], .modal-footer button.btn-primary');
+            const submitBtn = await page.$('button[type="submit"], .modal-footer button');
             if (submitBtn) await submitBtn.click();
 
             await page.waitForTimeout(2000);
 
-            // Check if error/duplicate username exists
-            const errorElement = await page.$('.error-message, .toast-error, .alert-danger');
-            if (!errorElement) {
+            // Check if submission succeeded or failed due to duplicate username
+            const errorToast = await page.$('.error-message, .toast-error, .alert-danger');
+            if (!errorToast) {
                 isSuccess = true;
                 await browser.close();
                 return { success: true, finalUsername: candidateUsername };
@@ -104,13 +109,13 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
         return { success: false };
 
     } catch (err) {
-        console.error("Puppeteer Execution Error:", err.message);
+        console.error("Firefox Automation Error:", err.message);
         if (browser) await browser.close();
         return { success: false };
     }
 }
 
-// Telegram Handlers
+// Telegram Flow
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
@@ -147,7 +152,7 @@ bot.on('message', async (msg) => {
 
         await bot.sendMessage(chatId, "Creating your account, please wait a moment... ⌛");
 
-        const result = await createAccountWithPuppeteer(session.username, session.name, session.phone);
+        const result = await createAccountWithFirefox(session.username, session.name, session.phone);
 
         if (result.success) {
             await bot.sendMessage(
@@ -162,4 +167,3 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
-                
