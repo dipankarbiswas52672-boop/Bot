@@ -6,7 +6,7 @@ const express = require('express');
 // Express Server for Render Health Check
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active with Sparticuz Chromium'));
+app.get('/', (req, res) => res.send('Bot Active'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
@@ -21,29 +21,37 @@ const userSessions = {};
 
 console.log("Telegram Bot Server Started...");
 
-// Fast Automation with Sparticuz Chromium
 async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumber) {
     let browser = null;
     try {
         browser = await puppeteer.launch({
-            args: chromium.args,
+            args: [
+                ...chromium.args,
+                '--dns-server=1.1.1.1,8.8.8.8', // Bypass DNS issues on Cloud
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-web-security'
+            ],
             defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
             headless: chromium.headless,
         });
 
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        // Custom User-Agent to avoid blocking
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 
         // 1. Open Agent Login Page
-        await page.goto('https://ag.sms444.com/ag/exchange/login', { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto('https://ag.sms444.com/ag/exchange/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-        // 2. Login
+        // 2. Perform Login
+        await page.waitForSelector('input[name="username"], input[type="text"]', { timeout: 15000 });
         await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
         await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
 
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {}),
             page.click('button[type="submit"]')
         ]);
 
@@ -109,7 +117,7 @@ async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumb
     }
 }
 
-// Telegram Handlers
+// Telegram Setup
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     userSessions[chatId] = { step: 1 };
