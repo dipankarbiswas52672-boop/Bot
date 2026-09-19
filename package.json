@@ -1,10 +1,11 @@
 {
   "name": "telegram-bot",
   "version": "1.0.0",
-  "description": "SMS444 Bot",
+  "description": "SMS444 Firefox Automation Bot",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npx puppeteer browsers install firefox"
   },
   "dependencies": {
     "express": "^4.18.2",
