@@ -5,7 +5,7 @@ const express = require('express');
 // Express Server for Render Port Binding
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active with Firefox Engine'));
+app.get('/', (req, res) => res.send('Bot Active'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
 // Configuration
@@ -18,23 +18,23 @@ const DEFAULT_USER_PASSWORD = "Abcd1234";
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
 
-console.log("Telegram Bot Server Started with Firefox Engine...");
+console.log("Telegram Bot Server Started...");
 
-// Puppeteer Account Creator via Firefox
-async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber) {
+async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumber) {
     let browser = null;
     try {
         browser = await puppeteer.launch({
-            browser: 'firefox',
-            headless: true,
+            headless: "new",
             args: [
                 '--no-sandbox',
-                '--disable-setuid-sandbox'
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--single-process'
             ]
         });
 
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0');
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         // 1. Agent Login
         await page.goto('https://ag.sms444.com/ag/exchange/login', { waitUntil: 'networkidle2', timeout: 60000 });
@@ -54,7 +54,6 @@ async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber
         let attempt = 0;
         let isSuccess = false;
 
-        // Loop to auto-increment duplicate usernames
         while (!isSuccess && attempt < 5) {
             const addButton = await page.$('button:has-text("Add User"), .add-user-btn');
             if (addButton) {
@@ -89,7 +88,6 @@ async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber
 
             await page.waitForTimeout(2000);
 
-            // Check if account created or username taken
             const errorToast = await page.$('.error-message, .toast-error, .alert-danger');
             if (!errorToast) {
                 isSuccess = true;
@@ -105,7 +103,7 @@ async function createAccountWithFirefox(requestedUsername, fullName, phoneNumber
         return { success: false };
 
     } catch (err) {
-        console.error("Firefox Automation Error:", err.message);
+        console.error("Puppeteer Automation Error:", err.message);
         if (browser) await browser.close();
         return { success: false };
     }
@@ -148,7 +146,7 @@ bot.on('message', async (msg) => {
 
         await bot.sendMessage(chatId, "Creating your account, please wait a moment... ⌛");
 
-        const result = await createAccountWithFirefox(session.username, session.name, session.phone);
+        const result = await createAccountWithPuppeteer(session.username, session.name, session.phone);
 
         if (result.success) {
             await bot.sendMessage(
@@ -163,4 +161,3 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
-                
