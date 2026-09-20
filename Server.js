@@ -1,7 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const express = require('express');
-const { Groq } = require('groq-sdk');
 
 // Express Server for Render Keep-Alive
 const app = express();
@@ -30,7 +29,6 @@ if (!TELEGRAM_TOKEN) {
 }
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-const groq = new Groq({ apiKey: GROQ_API_KEY });
 const userSessions = {};
 
 // Step 1: Login to Master Account & Get Fresh Bearer Token
@@ -121,7 +119,7 @@ async function createAccountAPI(userData, token) {
     }
 }
 
-// Step 3: Handle Groq AI Agent via Official SDK
+// Step 3: Handle Groq AI Agent via Direct Axios Call
 async function handleGroqAgent(chatId, userMessage) {
     if (!userSessions[chatId]) {
         userSessions[chatId] = {
@@ -133,25 +131,35 @@ async function handleGroqAgent(chatId, userMessage) {
     const session = userSessions[chatId];
     session.history.push({ role: "user", content: userMessage });
 
-    const systemPrompt = `You are an agent for SMS444. Collect 3 pieces of information:
+    const systemPrompt = `You are a registration assistant for SMS444. Collect 3 pieces of information:
 1. Full Name
 2. Desired Username
 3. Mobile Number
 
-When all 3 are gathered, output this JSON at the very end:
+Be friendly and ask one missing detail at a time.
+When ALL 3 details are collected, add ONLY this JSON at the very end of your reply:
 {"status": "COMPLETE", "fullName": "...", "username": "...", "phone": "..."}`;
 
     try {
-        const chatCompletion = await groq.chat.completions.create({
-            messages: [
-                { role: 'system', content: systemPrompt },
-                ...session.history
-            ],
-            model: 'llama3-70b-8192', // Updated to valid Groq model
-            temperature: 0.2
-        });
+        const response = await axios.post(
+            'https://api.groq.com/openai/v1/chat/completions',
+            {
+                model: 'llama-3.1-8b-instant', // Active supported model
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    ...session.history
+                ],
+                temperature: 0.2
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${GROQ_API_KEY}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
 
-        const aiReply = chatCompletion.choices[0]?.message?.content || "";
+        const aiReply = response.data.choices[0].message.content;
         session.history.push({ role: "assistant", content: aiReply });
 
         const jsonMatch = aiReply.match(/\{"status":\s*"COMPLETE".*?\}/s);
@@ -164,8 +172,8 @@ When all 3 are gathered, output this JSON at the very end:
         return { isComplete: false, replyText: aiReply };
 
     } catch (err) {
-        console.error("Groq SDK Error:", err.message);
-        return { isComplete: false, replyText: "I couldn't process that properly. Could you re-enter the info?" };
+        console.error("Groq AI API Error:", err.response?.data || err.message);
+        return { isComplete: false, replyText: "Could you please re-type that detail again?" };
     }
 }
 
@@ -221,3 +229,4 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
+    
