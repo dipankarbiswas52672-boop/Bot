@@ -298,7 +298,7 @@ async function submitAccountCreation(chatId, session) {
                         inline_keyboard: [
                             [
                                 {
-                                    text: "💳 Deposit Now (Auto Username)",
+                                    text: "💳 Deposit Now",
                                     url: depositUrl
                                 }
                             ],
