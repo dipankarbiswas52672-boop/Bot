@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const express = require('express');
 
-// Express Server for Render Keep-Alive
+// Express Server for Render Keep-Alive & Health Check
 const app = express();
 const PORT = process.env.PORT || 10000;
 
@@ -13,7 +13,7 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 // Environment Variables
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const AGENT_USERNAME = process.env.AGENT_USERNAME || "Bro090";
+const AGENT_USERNAME = (process.env.AGENT_USERNAME || "bro090").toLowerCase();
 const AGENT_PASSWORD = process.env.AGENT_PASSWORD || "Sourav123";
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
@@ -64,19 +64,19 @@ const getHeaders = (token = null) => {
     return headers;
 };
 
-// Auto Fetch Master Auth Token (Endpoint Corrected to /ag/login/agentLogin)
+// Automated Master Auth Token Fetcher
 async function getMasterAuthToken(forceRefresh = false) {
     if (cachedMasterToken && !forceRefresh) {
         return cachedMasterToken;
     }
 
     try {
-        console.log("Fetching Fresh Agent Login Token...");
+        console.log("Attempting Master Agent Login for fresh token...");
 
         const response = await api.post(
             '/ag/login/agentLogin',
             {
-                username: AGENT_USERNAME,
+                userName: AGENT_USERNAME,
                 password: AGENT_PASSWORD
             },
             { headers: getHeaders() }
@@ -85,28 +85,28 @@ async function getMasterAuthToken(forceRefresh = false) {
         let token = response.data?.data?.accessToken || response.data?.accessToken;
 
         if (token) {
-            console.log("Master Authorization Token Freshly Acquired!");
+            console.log("Master Authorization Token Successfully Acquired!");
             cachedMasterToken = token.replace(/^Bearer\s+/i, '');
             return cachedMasterToken;
         }
     } catch (err) {
-        console.warn("Agent Login Failed:", err.response?.data || err.message);
+        console.warn("Agent Login API Call Failed:", err.response?.data || err.message);
     }
 
     if (HARDCODED_MASTER_TOKEN) {
-        console.log("Using Fallback MASTER_BEARER_TOKEN...");
+        console.log("Using Fallback MASTER_BEARER_TOKEN from Env Variables...");
         cachedMasterToken = HARDCODED_MASTER_TOKEN.replace(/^Bearer\s+/i, '');
         return cachedMasterToken;
     }
 
-    throw new Error("Master Login failed and no MASTER_BEARER_TOKEN configured.");
+    throw new Error("Master Login failed and no fallback token available.");
 }
 
-// Create Account API Call with Dynamic Token Refresh & Retry
+// Create Account API Call with Auto Retry Logic
 async function createAccountAPI(userData, isRetry = false) {
     try {
         const token = await getMasterAuthToken(isRetry);
-        console.log(`Creating Account for: ${userData.username} (Is Retry:${isRetry})`);
+        console.log(`Sending Create Account Request for: ${userData.username} (Is Retry:${isRetry})`);
 
         const payload = {
             userName: userData.username,
@@ -141,7 +141,7 @@ async function createAccountAPI(userData, isRetry = false) {
 
         if (responseMsg.toLowerCase().includes("invalid token") || responseMsg.toLowerCase().includes("expired") || responseMsg.toLowerCase().includes("unauthorized")) {
             if (!isRetry) {
-                console.warn("Invalid Token response received. Auto refreshing token and retrying...");
+                console.warn("Expired token detected! Re-authenticating and retrying...");
                 cachedMasterToken = null;
                 return await createAccountAPI(userData, true);
             }
@@ -162,7 +162,7 @@ async function createAccountAPI(userData, isRetry = false) {
         const errDataMsg = err.response?.data?.meta?.message || err.response?.data?.message || "";
 
         if (!isRetry && (status === 401 || status === 403 || errDataMsg.toLowerCase().includes("token"))) {
-            console.warn("Auth Error detected. Retrying with fresh master token...");
+            console.warn("Auth Error detected! Re-authenticating with fresh master token...");
             cachedMasterToken = null;
             return await createAccountAPI(userData, true);
         }
@@ -174,6 +174,7 @@ async function createAccountAPI(userData, isRetry = false) {
     }
 }
 
+// Helper: Calculate remaining time for 12 hours
 function getRemainingRefundTime(createdAt) {
     const twelveHoursMs = 12 * 60 * 60 * 1000;
     const now = Date.now();
@@ -191,6 +192,7 @@ function getRemainingRefundTime(createdAt) {
     return { ready: false, text: `${hours}h ${minutes}m${seconds}s` };
 }
 
+// Helper: Auto-filled Agent URL
 function getAgentRedirectUrl(type, username = "") {
     let text = "";
     if (type === 'deposit') {
@@ -201,6 +203,7 @@ function getAgentRedirectUrl(type, username = "") {
     return `https://t.me/${AGENT_TELEGRAM_USER}?text=${encodeURIComponent(text)}`;
 }
 
+// Deposit Redirect Helper
 async function sendDepositRedirect(chatId) {
     const userAcc = userAccountStore[chatId];
     const username = userAcc ? userAcc.username : "";
@@ -223,6 +226,7 @@ async function sendDepositRedirect(chatId) {
     });
 }
 
+// Send Main Welcome Menu
 async function sendStartMenu(chatId, firstName = "") {
     const userAcc = userAccountStore[chatId];
     const depositUrl = getAgentRedirectUrl('deposit', userAcc?.username || "");
@@ -238,7 +242,7 @@ async function sendStartMenu(chatId, firstName = "") {
 
 🎁 *TODAY'S SPECIAL OFFER:*
 💸 *100% Loss Refund Guarantee!*
-- Account creation-er 12 hours complete hobar por loss refund claim kora jabe.
+- You will be eligible to receive the loss refund 12 hours after creating your account..
 
 👇 *Choose an option below:*`;
 
@@ -269,8 +273,9 @@ async function sendStartMenu(chatId, firstName = "") {
     });
 }
 
+// Helper: Submit Account Creation
 async function submitAccountCreation(chatId, session) {
-    await bot.sendMessage(chatId, "🔐 Authorizing Master Token & Creating Account...");
+    await bot.sendMessage(chatId, "🔐 Ai Agent Creating Account...");
 
     try {
         const createResult = await createAccountAPI(session.data);
@@ -337,6 +342,7 @@ async function submitAccountCreation(chatId, session) {
     }
 }
 
+// Handle Inline Keyboard Callbacks
 bot.on('callback_query', async (query) => {
     try {
         const chatId = query.message.chat.id;
@@ -389,7 +395,7 @@ bot.on('callback_query', async (query) => {
                     }
                 });
             } else {
-                const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* Account creation-er 12 hours complete hobar por refund claim kora jabe.`;
+                const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* You will be eligible to receive the loss refund 12 hours after creating your account..`;
                 await bot.sendMessage(chatId, countdownMsg, {
                     parse_mode: "Markdown",
                     reply_markup: {
@@ -406,6 +412,7 @@ bot.on('callback_query', async (query) => {
     }
 });
 
+// Telegram Message Handling
 bot.on('message', async (msg) => {
     try {
         const chatId = msg.chat.id;
@@ -479,10 +486,11 @@ bot.on('message', async (msg) => {
     }
 });
 
+// GLOBAL PROCESS CRASH PROTECTION
 process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
+    console.error('CRITICAL: Uncaught Exception:', err);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection:', reason);
+    console.error('CRITICAL: Unhandled Rejection:', reason);
 });
