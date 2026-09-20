@@ -375,7 +375,7 @@ bot.on('callback_query', async (query) => {
                 }
             });
         } else {
-            const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* Account creation-er 12 hours complete hobar por refund claim kora jabe.`;
+            const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* You will be eligible to receive the loss refund 12 hours after creating your account.`;
             await bot.sendMessage(chatId, countdownMsg, {
                 parse_mode: "Markdown",
                 reply_markup: {
