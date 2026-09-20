@@ -1,176 +1,241 @@
 const TelegramBot = require('node-telegram-bot-api');
-const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
+const axios = require('axios');
 const express = require('express');
 
-// Express Server for Render Health Check
+// Express Keep-Alive Server for Render
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot Active via Internal DNS Mapping'));
-app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
+app.get('/', (req, res) => res.send('SMS444 Agent Bot is Running...'));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
-// Credentials Setup
-const TELEGRAM_TOKEN = "8981609410:AAHSMnYzWmSUDuGmcZ-3IVGKGz3vB3Hosl0";
-const AGENT_USERNAME = "Bro090";
-const AGENT_PASSWORD = "Sourav123";
-const MASTER_PASSWORD = "Sourav123";
+// Environment Variables
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+
+// Master Credentials
+const AGENT_USERNAME = process.env.AGENT_USERNAME || "Bro090";
+const AGENT_PASSWORD = process.env.AGENT_PASSWORD || "Sourav123";
+const MASTER_PASSWORD = process.env.MASTER_PASSWORD || "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-// Direct Server IP & Host Configuration
+// Server Infrastructure
 const SERVER_IP = "43.204.42.19";
 const DOMAIN = "ag.sms444.com";
+const BASE_URL = `https://${SERVER_IP}`;
+
+if (!TELEGRAM_TOKEN) {
+    console.error("ERROR: TELEGRAM_TOKEN environment variable missing!");
+    process.exit(1);
+}
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 const userSessions = {};
 
-console.log("Telegram Bot Server Started...");
-
-async function createAccountWithPuppeteer(requestedUsername, fullName, phoneNumber) {
-    let browser = null;
+// Step 1: Login to Master Account & Get Fresh Bearer Token
+async function getMasterAuthToken() {
     try {
-        browser = await puppeteer.launch({
-            args: [
-                ...chromium.args,
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--ignore-certificate-errors',
-                '--disable-web-security',
-                `--host-resolver-rules=MAP ${DOMAIN}${SERVER_IP}` // Internal Chrome DNS Resolution Fix
-            ],
-            defaultViewport: chromium.defaultViewport,
-            executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
-        });
-
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-        // 1. Open Agent Login Page using Domain
-        const targetUrl = `https://${DOMAIN}/ag/exchange/login`;
-        console.log(`Connecting via mapped domain: ${targetUrl}`);
-        
-        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-        // 2. Perform Login
-        await page.waitForSelector('input[name="username"], input[type="text"]', { timeout: 15000 });
-        await page.type('input[name="username"], input[type="text"]', AGENT_USERNAME);
-        await page.type('input[name="password"], input[type="password"]', AGENT_PASSWORD);
-
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {}),
-            page.click('button[type="submit"]')
-        ]);
-
-        // 3. Open User List Page
-        await page.goto(`https://${DOMAIN}/list/user`, { waitUntil: 'networkidle2', timeout: 60000 });
-
-        let candidateUsername = requestedUsername;
-        let attempt = 0;
-        let isSuccess = false;
-
-        while (!isSuccess && attempt < 5) {
-            const addButton = await page.$('button:has-text("Add User"), .add-user-btn');
-            if (addButton) {
-                await addButton.click();
-            } else {
-                await page.click('.btn-primary');
+        console.log("Logging into Master Account...");
+        const response = await axios.post(
+            `${BASE_URL}/ag/exchange/login`,
+            {
+                username: AGENT_USERNAME,
+                password: AGENT_PASSWORD
+            },
+            {
+                headers: {
+                    'Host': DOMAIN,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json, text/plain, */*'
+                },
+                rejectUnauthorized: false
             }
+        );
 
-            await page.waitForTimeout(1500);
-
-            // Fill Form Fields
-            await page.evaluate((u, n, p, pass, master) => {
-                const inputs = document.querySelectorAll('input');
-                inputs.forEach(input => {
-                    const placeholder = (input.placeholder || '').toLowerCase();
-                    const nameAttr = (input.name || '').toLowerCase();
-
-                    if (nameAttr.includes('user') || placeholder.includes('username')) input.value = u;
-                    if (nameAttr.includes('name') || placeholder.includes('name')) input.value = n;
-                    if (nameAttr.includes('mobile') || placeholder.includes('mobile')) input.value = p;
-                    if (nameAttr.includes('password') && !nameAttr.includes('master')) input.value = pass;
-                    if (nameAttr.includes('confirm')) input.value = pass;
-                    if (nameAttr.includes('master')) input.value = master;
-
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                });
-            }, candidateUsername, fullName, phoneNumber, DEFAULT_USER_PASSWORD, MASTER_PASSWORD);
-
-            // Submit Form
-            const submitBtn = await page.$('button[type="submit"], .modal-footer button');
-            if (submitBtn) await submitBtn.click();
-
-            await page.waitForTimeout(2000);
-
-            const errorToast = await page.$('.error-message, .toast-error, .alert-danger');
-            if (!errorToast) {
-                isSuccess = true;
-                await browser.close();
-                return { success: true, finalUsername: candidateUsername };
-            }
-
-            attempt++;
-            candidateUsername = `${requestedUsername}${attempt < 10 ? '0' + attempt : attempt}`;
+        // Token extract logic
+        const token = response.data.token || response.data.access_token || response.data.data?.token;
+        if (!token) {
+            throw new Error("Token missing in login response");
         }
-
-        await browser.close();
-        return { success: false };
-
+        return token;
     } catch (err) {
-        console.error("Automation Error:", err.message);
-        if (browser) await browser.close();
-        return { success: false };
+        console.error("Master Login Failed:", err.response?.data || err.message);
+        throw new Error("Master Account Login Failed");
     }
 }
 
-// Telegram Flow Handlers
-bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    userSessions[chatId] = { step: 1 };
-    bot.sendMessage(chatId, "Welcome to SMS444 Account Setup! 🎲\n\nPlease enter your *Full Name*:", { parse_mode: "Markdown" });
-});
+// Step 2: Create User Account using collected data & Bearer Token
+async function createAccountAPI(userData, token) {
+    try {
+        console.log(`Creating account for ${userData.username}...`);
+        const payload = {
+            userName: userData.username,
+            name: userData.fullName,
+            password: DEFAULT_USER_PASSWORD,
+            confirmPassword: DEFAULT_USER_PASSWORD,
+            bankBalance: "0",
+            level: "7",
+            commission: "0",
+            exposureLimit: 5000,
+            creditReference: "0",
+            mobileNo: userData.phone,
+            partnership: "100",
+            rollingFancyCommission: 0,
+            rollingCasinoCommission: 0,
+            rollingBinaryCommission: 0,
+            rollingSportsbookCommission: 0,
+            rollingBookmakerCommission: 0,
+            rollingVirtualSportsCommission: 0,
+            rollingMatkaCommission: 0,
+            rollingLinemarketCommission: 0,
+            masterPassword: MASTER_PASSWORD
+        };
 
+        const response = await axios.post(
+            `${BASE_URL}/ag/exchange/account/createAccount`,
+            payload,
+            {
+                headers: {
+                    'Host': DOMAIN,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Authorization': `Bearer ${token}`
+                },
+                rejectUnauthorized: false
+            }
+        );
+
+        if (response.data && response.data.meta && response.data.meta.status) {
+            return { success: true, response: response.data };
+        } else {
+            return { success: false, message: response.data?.meta?.message || "Creation failed" };
+        }
+    } catch (err) {
+        console.error("Create Account API Error:", err.response?.data || err.message);
+        return { 
+            success: false, 
+            message: err.response?.data?.meta?.message || err.response?.data?.message || err.message 
+        };
+    }
+}
+
+// Step 3: Groq AI Dialogue Manager for Collecting User Data
+async function handleGroqAgent(chatId, userMessage) {
+    if (!userSessions[chatId]) {
+        userSessions[chatId] = {
+            history: [],
+            collected: { fullName: null, username: null, phone: null }
+        };
+    }
+
+    const session = userSessions[chatId];
+    session.history.push({ role: "user", content: userMessage });
+
+    const systemPrompt = `You are a professional support representative for SMS444.
+Your sole job is to politely collect 3 pieces of information from the customer to register their account:
+1. Full Name
+2. Desired Username
+3. Mobile Number
+
+Currently collected data: ${JSON.stringify(session.collected)}
+
+Instructions:
+- Be warm, helpful, and concise.
+- Ask for missing details one at a time.
+- As soon as you have all 3 details (fullName, username, phone), append ONLY this exact JSON object at the very end of your response:
+{"status": "COMPLETE", "fullName": "...", "username": "...", "phone": "..."}`;
+
+    try {
+        const response = await axios.post(
+            'https://api.groq.com/openai/v1/chat/completions',
+            {
+                model: 'llama-3.3-70b-versatile',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    ...session.history
+                ],
+                temperature: 0.2
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${GROQ_API_KEY}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const aiReply = response.data.choices[0].message.content;
+        session.history.push({ role: "assistant", content: aiReply });
+
+        // Check if data collection is complete
+        const jsonMatch = aiReply.match(/\{"status":\s*"COMPLETE".*?\}/s);
+        if (jsonMatch) {
+            const parsedData = JSON.parse(jsonMatch[0]);
+            const cleanText = aiReply.replace(jsonMatch[0], '').trim();
+            return { isComplete: true, data: parsedData, replyText: cleanText };
+        }
+
+        return { isComplete: false, replyText: aiReply };
+
+    } catch (err) {
+        console.error("Groq AI Error:", err.message);
+        return { isComplete: false, replyText: "I missed that. Could you please state the detail again?" };
+    }
+}
+
+// Telegram Event Handler
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text ? msg.text.trim() : "";
 
-    if (text.startsWith('/')) return;
+    if (!text) return;
 
-    if (!userSessions[chatId]) {
-        userSessions[chatId] = { step: 1 };
-        await bot.sendMessage(chatId, "Welcome to SMS444 Account Setup! 🎲\n\nPlease enter your *Full Name*:");
+    if (text.startsWith('/start')) {
+        delete userSessions[chatId];
+        await bot.sendMessage(
+            chatId, 
+            "Hello! Welcome to SMS444. 🎰\n\nI can help you create your account right away. May I have your *Full Name*?", 
+            { parse_mode: "Markdown" }
+        );
         return;
     }
 
-    const session = userSessions[chatId];
+    // Chat with Groq Agent
+    const agentRes = await handleGroqAgent(chatId, text);
 
-    if (session.step === 1) {
-        session.name = text;
-        session.step = 2;
-        await bot.sendMessage(chatId, `Thanks *${text}*!\n\nNow enter your preferred *Username*:`, { parse_mode: "Markdown" });
-    } 
-    else if (session.step === 2) {
-        session.username = text;
-        session.step = 3;
-        await bot.sendMessage(chatId, "Got it! Now enter your *10-digit Mobile Number*:");
-    } 
-    else if (session.step === 3) {
-        session.phone = text;
-        session.step = 4;
+    if (agentRes.replyText) {
+        await bot.sendMessage(chatId, agentRes.replyText);
+    }
 
-        await bot.sendMessage(chatId, "Creating your account, please wait a moment... ⌛");
+    // Trigger API Execution Workflow when all data is gathered
+    if (agentRes.isComplete) {
+        await bot.sendMessage(chatId, "Great! Authenticating with Master Account & creating your user ID... ⏳");
 
-        const result = await createAccountWithPuppeteer(session.username, session.name, session.phone);
+        try {
+            // 1. Get Master Auth Token
+            const token = await getMasterAuthToken();
 
-        if (result.success) {
+            // 2. Post User Creation
+            const createResult = await createAccountAPI(agentRes.data, token);
+
+            if (createResult.success) {
+                await bot.sendMessage(
+                    chatId,
+                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${agentRes.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Log in and change your password immediately.`,
+                    { parse_mode: "Markdown" }
+                );
+            } else {
+                await bot.sendMessage(
+                    chatId,
+                    `❌ *Account Creation Failed*\n*Reason:* ${createResult.message}`
+                );
+            }
+        } catch (error) {
             await bot.sendMessage(
-                chatId, 
-                `🎉 *Account Created Successfully!*\n\n🌐 *Website:* https://sms444.com\n👤 *Username:* \`${result.finalUsername}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Please change your password right after your first login.`, 
-                { parse_mode: "Markdown" }
+                chatId,
+                `❌ *Process Error:* ${error.message}. Please try again later.`
             );
-        } else {
-            await bot.sendMessage(chatId, "❌ Account creation failed. Please try again later or contact customer support.");
         }
 
         delete userSessions[chatId];
