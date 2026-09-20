@@ -32,9 +32,10 @@ if (!TELEGRAM_TOKEN) {
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// Stores Active User Creation Sessions and Permanent Account Identities
+// Memory Stores
 const userSessions = {};
 const userAccountStore = {}; // Key: Telegram ChatId, Value: { username, fullName, createdAt }
+let cachedMasterToken = null; // Memory cache for Master Token
 
 const api = axios.create({
     baseURL: BASE_URL,
@@ -60,10 +61,14 @@ const getHeaders = (token = null) => {
     return headers;
 };
 
-// Master Auth Token Fetcher
-async function getMasterAuthToken() {
+// Master Auth Token Fetcher (Always fetches FRESH token if forceRefresh is true)
+async function getMasterAuthToken(forceRefresh = false) {
+    if (cachedMasterToken && !forceRefresh) {
+        return cachedMasterToken;
+    }
+
     try {
-        console.log("Attempting Master Account Login...");
+        console.log("Attempting Master Account Login for fresh token...");
         await api.get('/ag/', { headers: getHeaders() }).catch(() => {});
 
         const response = await api.post(
@@ -87,8 +92,9 @@ async function getMasterAuthToken() {
         }
 
         if (token) {
-            console.log("Master Authorization Token Acquired via API!");
-            return token.replace(/^Bearer\s+/i, '');
+            console.log("Master Authorization Token Freshly Acquired via API!");
+            cachedMasterToken = token.replace(/^Bearer\s+/i, '');
+            return cachedMasterToken;
         }
     } catch (err) {
         console.warn("Live Login Failed:", err.response?.data || err.message);
@@ -96,16 +102,19 @@ async function getMasterAuthToken() {
 
     if (HARDCODED_MASTER_TOKEN) {
         console.log("Using Fallback MASTER_BEARER_TOKEN from Environment Variables...");
-        return HARDCODED_MASTER_TOKEN.replace(/^Bearer\s+/i, '');
+        cachedMasterToken = HARDCODED_MASTER_TOKEN.replace(/^Bearer\s+/i, '');
+        return cachedMasterToken;
     }
 
     throw new Error("Master Login failed and no MASTER_BEARER_TOKEN configured.");
 }
 
-// Create Account API Call
-async function createAccountAPI(userData, token) {
+// Create Account API Call with Dynamic Token Refresh & Retry
+async function createAccountAPI(userData, isRetry = false) {
     try {
-        console.log(`Sending Create Account Request for: ${userData.username}`);
+        // Fetch current token (force refresh if retry)
+        const token = await getMasterAuthToken(isRetry);
+        console.log(`Sending Create Account Request for: ${userData.username} (Is Retry:${isRetry})`);
 
         const payload = {
             userName: userData.username,
@@ -136,19 +145,41 @@ async function createAccountAPI(userData, token) {
             { headers: getHeaders(token) }
         );
 
+        const responseMsg = response.data?.meta?.message || response.data?.message || "";
+
+        // Check for Token Expiry/Invalid token response from API body
+        if (responseMsg.toLowerCase().includes("invalid token") || responseMsg.toLowerCase().includes("expired") || responseMsg.toLowerCase().includes("unauthorized")) {
+            if (!isRetry) {
+                console.warn("Invalid Token response received. Forcing fresh token refresh and retrying...");
+                cachedMasterToken = null; // Clear cached token
+                return await createAccountAPI(userData, true); // Automatic Retry
+            }
+        }
+
         if (response.data && response.data.meta && response.data.meta.status) {
             return { success: true, response: response.data };
         } else {
             return { 
                 success: false, 
-                message: response.data?.meta?.message || "Server rejected account creation." 
+                message: responseMsg || "Server rejected account creation." 
             };
         }
     } catch (err) {
         console.error("Create Account Error:", err.response?.data || err.message);
+        
+        const status = err.response?.status;
+        const errDataMsg = err.response?.data?.meta?.message || err.response?.data?.message || "";
+
+        // Retry on 401/403 or Invalid Token Error
+        if (!isRetry && (status === 401 || status === 403 || errDataMsg.toLowerCase().includes("token"))) {
+            console.warn("HTTP Auth Error detected. Retrying with fresh master token...");
+            cachedMasterToken = null;
+            return await createAccountAPI(userData, true);
+        }
+
         return { 
             success: false, 
-            message: err.response?.data?.meta?.message || err.response?.data?.message || err.message 
+            message: errDataMsg || err.message 
         };
     }
 }
@@ -221,7 +252,8 @@ async function sendStartMenu(chatId, firstName = "") {
 
 🎁 *TODAY'S SPECIAL OFFER:*
 💸 *100% Loss Refund Guarantee!*
-- You will be eligible to receive the loss refund 12 hours after creating your account.
+- You will be eligible to receive the loss refund 12 hours after creating your account..
+
 👇 *Choose an option below:*`;
 
     const keyboardOptions = [];
@@ -251,13 +283,12 @@ async function sendStartMenu(chatId, firstName = "") {
     });
 }
 
-// Helper: Attempt to Submit Account Creation with Auto-retry for Username
+// Helper: Submit Account Creation with Auto Token Refresh logic
 async function submitAccountCreation(chatId, session) {
-    await bot.sendMessage(chatId, "🔐 Creating Account...");
+    await bot.sendMessage(chatId, "🔐 Ai Agrnt Creating Account...");
 
     try {
-        const token = await getMasterAuthToken();
-        const createResult = await createAccountAPI(session.data, token);
+        const createResult = await createAccountAPI(session.data);
 
         if (createResult.success) {
             // Permanently store user identity
@@ -278,7 +309,7 @@ async function submitAccountCreation(chatId, session) {
                         inline_keyboard: [
                             [
                                 {
-                                    text: "💳 Deposit Now",
+                                    text: "💳 Deposit Now ",
                                     url: depositUrl
                                 }
                             ],
@@ -297,9 +328,9 @@ async function submitAccountCreation(chatId, session) {
         } else {
             const errorMsg = createResult.message ? createResult.message.toLowerCase() : "";
 
-            // Handle Username Already Exists (Resume flow from Username prompt)
+            // Handle Username Already Exists
             if (errorMsg.includes("already exist") || errorMsg.includes("username") || errorMsg.includes("taken") || errorMsg.includes("duplicate")) {
-                session.step = 'AWAITING_USERNAME'; // Resume flow back to username entry
+                session.step = 'AWAITING_USERNAME';
                 
                 await bot.sendMessage(
                     chatId,
@@ -375,7 +406,7 @@ bot.on('callback_query', async (query) => {
                 }
             });
         } else {
-            const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* You will be eligible to receive the loss refund 12 hours after creating your account.`;
+            const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* You will be eligible to receive the loss refund 12 hours after creating your account..`;
             await bot.sendMessage(chatId, countdownMsg, {
                 parse_mode: "Markdown",
                 reply_markup: {
@@ -448,7 +479,6 @@ bot.on('message', async (msg) => {
     if (session.step === 'AWAITING_USERNAME') {
         session.data.username = text.replace(/\s+/g, '');
 
-        // If phone already exists from previous attempt, proceed directly to API creation
         if (session.data.phone) {
             await submitAccountCreation(chatId, session);
         } else {
@@ -466,4 +496,3 @@ bot.on('message', async (msg) => {
         await submitAccountCreation(chatId, session);
     }
 });
-    
