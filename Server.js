@@ -254,7 +254,7 @@ async function sendStartMenu(chatId, firstName = "") {
 
 // Helper: Attempt to Submit Account Creation with Auto-retry for Username
 async function submitAccountCreation(chatId, session) {
-    await bot.sendMessage(chatId, "🔐 Authorizing Master Token & Creating Account...");
+    await bot.sendMessage(chatId, "🔐 Creating Account...");
 
     try {
         const token = await getMasterAuthToken();
@@ -279,7 +279,7 @@ async function submitAccountCreation(chatId, session) {
                         inline_keyboard: [
                             [
                                 {
-                                    text: "💳 Deposit Now (Auto Username)",
+                                    text: "💳 Deposit Now",
                                     url: depositUrl
                                 }
                             ],
