@@ -22,7 +22,7 @@ const SERVER_IP = "43.204.42.19";
 const DOMAIN = "ag.sms444.com";
 const BASE_URL = `https://${SERVER_IP}`;
 
-// Deposit Telegram Handle
+// Telegram Handles
 const DEPOSIT_TELEGRAM_HANDLE = "@agsms444";
 
 if (!TELEGRAM_TOKEN) {
@@ -152,7 +152,7 @@ async function createAccountAPI(userData, token) {
 
 // Deposit Redirect Helper
 async function sendDepositRedirect(chatId) {
-    const messageText = `💳 *Deposit Request*\n\nFor instant deposit and payment details, please contact our official Deposit Desk directly:\n\n👉 *Telegram:* https://t.me/agsms444\n\nClick the button below to message ${DEPOSIT_TELEGRAM_HANDLE}:`;
+    const messageText = `💳 *Deposit & Payment Desk*\n\nFor instant deposit, bonus claims, and payment details, please contact our official Deposit Desk directly:\n\n👉 *Telegram:* https://t.me/agsms444\n\nClick the button below to message ${DEPOSIT_TELEGRAM_HANDLE}:`;
     
     await bot.sendMessage(chatId, messageText, {
         parse_mode: "Markdown",
@@ -169,6 +169,72 @@ async function sendDepositRedirect(chatId) {
     });
 }
 
+// Send Main Welcome Menu with Offers
+async function sendStartMenu(chatId, firstName = "") {
+    const welcomeMsg = `🔥 *Welcome to SMS444 Official Bot!* ${firstName ? `Hello *${firstName}*! ` : ''}🎰
+
+🎁 *TODAY'S SPECIAL OFFER:*
+💸 *100% Loss Refund Guarantee!*
+- Play your favorite games today.
+- Get instant Loss Refund back on your deposits!
+- Fast payouts & 24/7 Support.
+
+👇 *Choose an option below to get started:*`;
+
+    await bot.sendMessage(chatId, welcomeMsg, {
+        parse_mode: "Markdown",
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: "👤 Create New Account", callback_data: "START_REGISTER" },
+                    { text: "💳 Deposit / Add Funds", url: "https://t.me/agsms444" }
+                ],
+                [
+                    { text: "🔥 Today's Loss Refund Details", callback_data: "SHOW_OFFER" },
+                    { text: "💬 Live Support (@agsms444)", url: "https://t.me/agsms444" }
+                ]
+            ]
+        }
+    });
+}
+
+// Handle Inline Keyboard Callbacks (Button Clicks)
+bot.on('callback_query', async (query) => {
+    const chatId = query.message.chat.id;
+    const action = query.data;
+
+    await bot.answerCallbackQuery(query.id);
+
+    if (action === 'START_REGISTER') {
+        userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
+        await bot.sendMessage(chatId, "👤 *Account Creation Wizard*\n\nPlease reply with your *Full Name* to start registration:", { parse_mode: "Markdown" });
+    } else if (action === 'SHOW_OFFER') {
+        const offerDetails = `🎁 *TODAY'S LOSS REFUND OFFER DETAILS:*
+
+✨ *Offer Highlights:*
+• 💯 *100% Loss Cashback/Refund* on your first deposit games!
+• ⚡ Fast Instant Processing via Deposit Desk.
+• 🔒 Safe & Secure Betting Platform.
+
+👉 *How to Claim:*
+1. Create an account here.
+2. Contact Deposit Desk: https://t.me/agsms444
+3. Mention code: \`LOSS-REFUND-444\``;
+
+        await bot.sendMessage(chatId, offerDetails, {
+            parse_mode: "Markdown",
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: "💳 Claim Offer & Deposit Now", url: "https://t.me/agsms444" },
+                        { text: "👤 Create Account", callback_data: "START_REGISTER" }
+                    ]
+                ]
+            }
+        });
+    }
+});
+
 // Telegram Message Handling
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -184,31 +250,38 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Start Flow
+    // Check for Offer Keywords
+    if (lowerText.includes('offer') || lowerText.includes('loss') || lowerText.includes('refund') || lowerText.includes('অফার')) {
+        await bot.sendMessage(chatId, `🎁 *Today's Special Offer:* 100% Loss Refund Available!\n\nContact Deposit Desk to claim: https://t.me/agsms444`, {
+            parse_mode: "Markdown",
+            reply_markup: {
+                inline_keyboard: [[{ text: "💬 Contact Deposit Desk", url: "https://t.me/agsms444" }]]
+            }
+        });
+        return;
+    }
+
+    // Start Command
     if (text.startsWith('/start')) {
-        userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
-        await bot.sendMessage(
-            chatId, 
-            "Hello! Welcome to SMS444. 🎰\n\nPlease reply with your *Full Name* to create an account, or type *deposit* to add funds:", 
-            { parse_mode: "Markdown" }
-        );
+        delete userSessions[chatId];
+        await sendStartMenu(chatId, msg.from?.first_name || "");
         return;
     }
 
-    // If session doesn't exist yet
-    if (!userSessions[chatId]) {
-        userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
-        await bot.sendMessage(chatId, "Please enter your *Full Name* to start creation (or type *deposit* for deposit info):", { parse_mode: "Markdown" });
-        return;
-    }
-
+    // Registration Session Flow
     const session = userSessions[chatId];
+
+    if (!session) {
+        // Default fallthrough if not registering
+        await sendStartMenu(chatId, msg.from?.first_name || "");
+        return;
+    }
 
     // Registration Step 1: Name
     if (session.step === 'AWAITING_NAME') {
         session.data.fullName = text;
         session.step = 'AWAITING_USERNAME';
-        await bot.sendMessage(chatId, `Got it, *${text}*!\n\nNow, enter desired *Username*:`, { parse_mode: "Markdown" });
+        await bot.sendMessage(chatId, `Got it, *${text}*!\n\nNow, enter your desired *Username*:`, { parse_mode: "Markdown" });
         return;
     }
 
@@ -216,7 +289,7 @@ bot.on('message', async (msg) => {
     if (session.step === 'AWAITING_USERNAME') {
         session.data.username = text.replace(/\s+/g, '');
         session.step = 'AWAITING_PHONE';
-        await bot.sendMessage(chatId, `Username: \`${session.data.username}\`\n\nFinally, enter *Mobile Number*:`, { parse_mode: "Markdown" });
+        await bot.sendMessage(chatId, `Username: \`${session.data.username}\`\n\nFinally, enter your *Mobile Number*:`, { parse_mode: "Markdown" });
         return;
     }
 
@@ -225,7 +298,7 @@ bot.on('message', async (msg) => {
         session.data.phone = text;
         session.step = 'PROCESSING';
 
-        await bot.sendMessage(chatId, "🔐Creating Account...");
+        await bot.sendMessage(chatId, "🔐 Authorizing Master Token & Creating Account...");
 
         try {
             const token = await getMasterAuthToken();
@@ -234,14 +307,14 @@ bot.on('message', async (msg) => {
             if (createResult.success) {
                 await bot.sendMessage(
                     chatId,
-                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ Log in and change password immediately.\n\n💳 *For Deposit:* Type *deposit* or click below to contact ${DEPOSIT_TELEGRAM_HANDLE}`,
+                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ Log in and change your password immediately.\n\n🎁 *Today's Offer:* Get 100% Loss Refund on your first Deposit!\n💳 *Deposit Handle:* ${DEPOSIT_TELEGRAM_HANDLE}`,
                     {
                         parse_mode: "Markdown",
                         reply_markup: {
                             inline_keyboard: [
                                 [
                                     {
-                                        text: "💳 Deposit Now (@agsms444)",
+                                        text: "💳 Claim Loss Refund & Deposit Now",
                                         url: "https://t.me/agsms444"
                                     }
                                 ]
@@ -265,4 +338,3 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
-        
