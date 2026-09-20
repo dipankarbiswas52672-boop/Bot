@@ -5,7 +5,10 @@ const express = require('express');
 // Express Server for Render Keep-Alive
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('SMS444 Agent Bot Active'));
+
+app.get('/', (req, res) => res.send('SMS444 Agent Bot Active & Healthy'));
+app.get('/health', (req, res) => res.status(200).send('OK'));
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 // Environment Variables
@@ -15,14 +18,12 @@ const AGENT_PASSWORD = process.env.AGENT_PASSWORD || "Sourav123";
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-// Render Environment Variables Fallback Token
 const HARDCODED_MASTER_TOKEN = process.env.MASTER_BEARER_TOKEN || "";
 
 const SERVER_IP = "43.204.42.19";
 const DOMAIN = "ag.sms444.com";
 const BASE_URL = `https://${SERVER_IP}`;
 
-// Telegram Agent Handle (without @ for deep linking)
 const AGENT_TELEGRAM_USER = "agsms444"; 
 
 if (!TELEGRAM_TOKEN) {
@@ -32,10 +33,13 @@ if (!TELEGRAM_TOKEN) {
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// Memory Stores
+bot.on('polling_error', (error) => {
+    console.error(`Telegram Polling Error: ${error.code} -${error.message}`);
+});
+
 const userSessions = {};
-const userAccountStore = {}; // Key: Telegram ChatId, Value: { username, fullName, createdAt }
-let cachedMasterToken = null; // Memory cache for Master Token
+const userAccountStore = {}; 
+let cachedMasterToken = null;
 
 const api = axios.create({
     baseURL: BASE_URL,
@@ -43,15 +47,14 @@ const api = axios.create({
     rejectUnauthorized: false
 });
 
-// Build Headers
 const getHeaders = (token = null) => {
     const headers = {
         'Host': DOMAIN,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/plain, */*',
         'Origin': `https://${DOMAIN}`,
-        'Referer': `https://${DOMAIN}/`
+        'Referer': `https://${DOMAIN}/login`
     };
 
     if (token) {
@@ -61,18 +64,17 @@ const getHeaders = (token = null) => {
     return headers;
 };
 
-// Master Auth Token Fetcher (Always fetches FRESH token if forceRefresh is true)
+// Auto Fetch Master Auth Token (Endpoint Corrected to /ag/login/agentLogin)
 async function getMasterAuthToken(forceRefresh = false) {
     if (cachedMasterToken && !forceRefresh) {
         return cachedMasterToken;
     }
 
     try {
-        console.log("Attempting Master Account Login for fresh token...");
-        await api.get('/ag/', { headers: getHeaders() }).catch(() => {});
+        console.log("Fetching Fresh Agent Login Token...");
 
         const response = await api.post(
-            '/ag/exchange/login',
+            '/ag/login/agentLogin',
             {
                 username: AGENT_USERNAME,
                 password: AGENT_PASSWORD
@@ -80,28 +82,19 @@ async function getMasterAuthToken(forceRefresh = false) {
             { headers: getHeaders() }
         );
 
-        let token = response.headers['authorization'] || 
-                    response.headers['x-auth-token'] || 
-                    response.headers['token'];
-
-        if (!token && response.data) {
-            token = response.data.token || 
-                    response.data.access_token || 
-                    response.data.data?.token || 
-                    response.data.result?.token;
-        }
+        let token = response.data?.data?.accessToken || response.data?.accessToken;
 
         if (token) {
-            console.log("Master Authorization Token Freshly Acquired via API!");
+            console.log("Master Authorization Token Freshly Acquired!");
             cachedMasterToken = token.replace(/^Bearer\s+/i, '');
             return cachedMasterToken;
         }
     } catch (err) {
-        console.warn("Live Login Failed:", err.response?.data || err.message);
+        console.warn("Agent Login Failed:", err.response?.data || err.message);
     }
 
     if (HARDCODED_MASTER_TOKEN) {
-        console.log("Using Fallback MASTER_BEARER_TOKEN from Environment Variables...");
+        console.log("Using Fallback MASTER_BEARER_TOKEN...");
         cachedMasterToken = HARDCODED_MASTER_TOKEN.replace(/^Bearer\s+/i, '');
         return cachedMasterToken;
     }
@@ -112,9 +105,8 @@ async function getMasterAuthToken(forceRefresh = false) {
 // Create Account API Call with Dynamic Token Refresh & Retry
 async function createAccountAPI(userData, isRetry = false) {
     try {
-        // Fetch current token (force refresh if retry)
         const token = await getMasterAuthToken(isRetry);
-        console.log(`Sending Create Account Request for: ${userData.username} (Is Retry:${isRetry})`);
+        console.log(`Creating Account for: ${userData.username} (Is Retry:${isRetry})`);
 
         const payload = {
             userName: userData.username,
@@ -147,12 +139,11 @@ async function createAccountAPI(userData, isRetry = false) {
 
         const responseMsg = response.data?.meta?.message || response.data?.message || "";
 
-        // Check for Token Expiry/Invalid token response from API body
         if (responseMsg.toLowerCase().includes("invalid token") || responseMsg.toLowerCase().includes("expired") || responseMsg.toLowerCase().includes("unauthorized")) {
             if (!isRetry) {
-                console.warn("Invalid Token response received. Forcing fresh token refresh and retrying...");
-                cachedMasterToken = null; // Clear cached token
-                return await createAccountAPI(userData, true); // Automatic Retry
+                console.warn("Invalid Token response received. Auto refreshing token and retrying...");
+                cachedMasterToken = null;
+                return await createAccountAPI(userData, true);
             }
         }
 
@@ -170,9 +161,8 @@ async function createAccountAPI(userData, isRetry = false) {
         const status = err.response?.status;
         const errDataMsg = err.response?.data?.meta?.message || err.response?.data?.message || "";
 
-        // Retry on 401/403 or Invalid Token Error
         if (!isRetry && (status === 401 || status === 403 || errDataMsg.toLowerCase().includes("token"))) {
-            console.warn("HTTP Auth Error detected. Retrying with fresh master token...");
+            console.warn("Auth Error detected. Retrying with fresh master token...");
             cachedMasterToken = null;
             return await createAccountAPI(userData, true);
         }
@@ -184,7 +174,6 @@ async function createAccountAPI(userData, isRetry = false) {
     }
 }
 
-// Helper: Calculate remaining time for 12 hours
 function getRemainingRefundTime(createdAt) {
     const twelveHoursMs = 12 * 60 * 60 * 1000;
     const now = Date.now();
@@ -202,7 +191,6 @@ function getRemainingRefundTime(createdAt) {
     return { ready: false, text: `${hours}h ${minutes}m${seconds}s` };
 }
 
-// Helper: Auto-filled Agent URL
 function getAgentRedirectUrl(type, username = "") {
     let text = "";
     if (type === 'deposit') {
@@ -213,7 +201,6 @@ function getAgentRedirectUrl(type, username = "") {
     return `https://t.me/${AGENT_TELEGRAM_USER}?text=${encodeURIComponent(text)}`;
 }
 
-// Deposit Redirect Helper
 async function sendDepositRedirect(chatId) {
     const userAcc = userAccountStore[chatId];
     const username = userAcc ? userAcc.username : "";
@@ -236,7 +223,6 @@ async function sendDepositRedirect(chatId) {
     });
 }
 
-// Send Main Welcome Menu
 async function sendStartMenu(chatId, firstName = "") {
     const userAcc = userAccountStore[chatId];
     const depositUrl = getAgentRedirectUrl('deposit', userAcc?.username || "");
@@ -252,7 +238,7 @@ async function sendStartMenu(chatId, firstName = "") {
 
 🎁 *TODAY'S SPECIAL OFFER:*
 💸 *100% Loss Refund Guarantee!*
-- You will be eligible to receive the loss refund 12 hours after creating your account..
+- Account creation-er 12 hours complete hobar por loss refund claim kora jabe.
 
 👇 *Choose an option below:*`;
 
@@ -283,15 +269,13 @@ async function sendStartMenu(chatId, firstName = "") {
     });
 }
 
-// Helper: Submit Account Creation with Auto Token Refresh logic
 async function submitAccountCreation(chatId, session) {
-    await bot.sendMessage(chatId, "🔐 Ai Agrnt Creating Account...");
+    await bot.sendMessage(chatId, "🔐 Authorizing Master Token & Creating Account...");
 
     try {
         const createResult = await createAccountAPI(session.data);
 
         if (createResult.success) {
-            // Permanently store user identity
             userAccountStore[chatId] = {
                 username: session.data.username,
                 fullName: session.data.fullName,
@@ -309,7 +293,7 @@ async function submitAccountCreation(chatId, session) {
                         inline_keyboard: [
                             [
                                 {
-                                    text: "💳 Deposit Now ",
+                                    text: "💳 Deposit Now (Auto Username)",
                                     url: depositUrl
                                 }
                             ],
@@ -328,7 +312,6 @@ async function submitAccountCreation(chatId, session) {
         } else {
             const errorMsg = createResult.message ? createResult.message.toLowerCase() : "";
 
-            // Handle Username Already Exists
             if (errorMsg.includes("already exist") || errorMsg.includes("username") || errorMsg.includes("taken") || errorMsg.includes("duplicate")) {
                 session.step = 'AWAITING_USERNAME';
                 
@@ -354,145 +337,152 @@ async function submitAccountCreation(chatId, session) {
     }
 }
 
-// Handle Inline Keyboard Callbacks
 bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    const action = query.data;
+    try {
+        const chatId = query.message.chat.id;
+        const action = query.data;
 
-    await bot.answerCallbackQuery(query.id);
+        await bot.answerCallbackQuery(query.id);
 
-    if (action === 'START_REGISTER') {
-        if (userAccountStore[chatId]) {
-            await bot.sendMessage(chatId, `⚠️ *Account Already Exists!*\n\nYour Telegram account is already linked with Username: \`${userAccountStore[chatId].username}\`. Multiple account creation is restricted!`, { parse_mode: "Markdown" });
-            return;
+        if (action === 'START_REGISTER') {
+            if (userAccountStore[chatId]) {
+                await bot.sendMessage(chatId, `⚠️ *Account Already Exists!*\n\nYour Telegram account is already linked with Username: \`${userAccountStore[chatId].username}\`. Multiple account creation is restricted!`, { parse_mode: "Markdown" });
+                return;
+            }
+
+            userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
+            await bot.sendMessage(chatId, "👤 *Account Creation Wizard*\n\nPlease reply with your *Full Name* to start registration:", { parse_mode: "Markdown" });
+        } else if (action === 'VIEW_PROFILE') {
+            const userAcc = userAccountStore[chatId];
+            if (userAcc) {
+                await bot.sendMessage(chatId, `👤 *YOUR SAVED ACCOUNT IDENTITY*\n\n• *Full Name:* ${userAcc.fullName}\n• *Username:* \`${userAcc.username}\`\n• *Registered On:* ${new Date(userAcc.createdAt).toLocaleString()}\n\n💳 *Deposit Handle:* @agsms444`, {
+                    parse_mode: "Markdown",
+                    reply_markup: {
+                        inline_keyboard: [[{ text: "💳 Deposit Funds", url: getAgentRedirectUrl('deposit', userAcc.username) }]]
+                    }
+                });
+            }
+        } else if (action === 'SHOW_OFFER') {
+            const userAcc = userAccountStore[chatId];
+
+            if (!userAcc) {
+                await bot.sendMessage(chatId, "⚠️ *No Active Account Found!*\n\nPlease create an account first to start the 12-hour Loss Refund Countdown.", {
+                    parse_mode: "Markdown",
+                    reply_markup: {
+                        inline_keyboard: [[{ text: "👤 Create Account Now", callback_data: "START_REGISTER" }]]
+                    }
+                });
+                return;
+            }
+
+            const timer = getRemainingRefundTime(userAcc.createdAt);
+            const refundUrl = getAgentRedirectUrl('refund', userAcc.username);
+
+            if (timer.ready) {
+                const readyMsg = `🎉 *CONGRATULATIONS!* 🎉\n\nYour 12-hour waiting time is complete for Saved Username: \`${userAcc.username}\`!\n\nYou can now claim your *100% Loss Refund* directly from our Agent!`;
+                await bot.sendMessage(chatId, readyMsg, {
+                    parse_mode: "Markdown",
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: "💸 Claim Loss Refund Now (@agsms444)", url: refundUrl }]
+                        ]
+                    }
+                });
+            } else {
+                const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* Account creation-er 12 hours complete hobar por refund claim kora jabe.`;
+                await bot.sendMessage(chatId, countdownMsg, {
+                    parse_mode: "Markdown",
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: "🔄 Refresh Countdown Status", callback_data: "SHOW_OFFER" }],
+                            [{ text: "💳 Deposit Funds", url: getAgentRedirectUrl('deposit', userAcc.username) }]
+                        ]
+                    }
+                });
+            }
         }
-
-        userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
-        await bot.sendMessage(chatId, "👤 *Account Creation Wizard*\n\nPlease reply with your *Full Name* to start registration:", { parse_mode: "Markdown" });
-    } else if (action === 'VIEW_PROFILE') {
-        const userAcc = userAccountStore[chatId];
-        if (userAcc) {
-            await bot.sendMessage(chatId, `👤 *YOUR SAVED ACCOUNT IDENTITY*\n\n• *Full Name:* ${userAcc.fullName}\n• *Username:* \`${userAcc.username}\`\n• *Registered On:* ${new Date(userAcc.createdAt).toLocaleString()}\n\n💳 *Deposit Handle:* @agsms444`, {
-                parse_mode: "Markdown",
-                reply_markup: {
-                    inline_keyboard: [[{ text: "💳 Deposit Funds", url: getAgentRedirectUrl('deposit', userAcc.username) }]]
-                }
-            });
-        }
-    } else if (action === 'SHOW_OFFER') {
-        const userAcc = userAccountStore[chatId];
-
-        if (!userAcc) {
-            await bot.sendMessage(chatId, "⚠️ *No Active Account Found!*\n\nPlease create an account first to start the 12-hour Loss Refund Countdown.", {
-                parse_mode: "Markdown",
-                reply_markup: {
-                    inline_keyboard: [[{ text: "👤 Create Account Now", callback_data: "START_REGISTER" }]]
-                }
-            });
-            return;
-        }
-
-        const timer = getRemainingRefundTime(userAcc.createdAt);
-        const refundUrl = getAgentRedirectUrl('refund', userAcc.username);
-
-        if (timer.ready) {
-            const readyMsg = `🎉 *CONGRATULATIONS!* 🎉\n\nYour 12-hour waiting time is complete for Saved Username: \`${userAcc.username}\`!\n\nYou can now claim your *100% Loss Refund* directly from our Agent!`;
-            await bot.sendMessage(chatId, readyMsg, {
-                parse_mode: "Markdown",
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: "💸 Claim Loss Refund Now (@agsms444)", url: refundUrl }]
-                    ]
-                }
-            });
-        } else {
-            const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* You will be eligible to receive the loss refund 12 hours after creating your account..`;
-            await bot.sendMessage(chatId, countdownMsg, {
-                parse_mode: "Markdown",
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: "🔄 Refresh Countdown Status", callback_data: "SHOW_OFFER" }],
-                        [{ text: "💳 Deposit Funds", url: getAgentRedirectUrl('deposit', userAcc.username) }]
-                    ]
-                }
-            });
-        }
+    } catch (err) {
+        console.error("Callback Error:", err.message);
     }
 });
 
-// Telegram Message Handling
 bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    const text = msg.text ? msg.text.trim() : "";
+    try {
+        const chatId = msg.chat.id;
+        const text = msg.text ? msg.text.trim() : "";
 
-    if (!text) return;
+        if (!text) return;
 
-    const lowerText = text.toLowerCase();
+        const lowerText = text.toLowerCase();
 
-    // Check for Deposit Keywords
-    if (lowerText === 'deposit' || lowerText === 'depo' || lowerText === 'ডিপোজিট' || lowerText === '/deposit') {
-        await sendDepositRedirect(chatId);
-        return;
-    }
-
-    // Check for Offer/Refund Keywords
-    if (lowerText.includes('offer') || lowerText.includes('loss') || lowerText.includes('refund') || lowerText.includes('অফার')) {
-        const userAcc = userAccountStore[chatId];
-        const refundUrl = getAgentRedirectUrl('refund', userAcc?.username || "");
-        
-        await bot.sendMessage(chatId, `🎁 *Loss Refund Status*\n\nType /start or click below to check your 12-hour countdown status!`, {
-            parse_mode: "Markdown",
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: "⏱️ Check Countdown Status", callback_data: "SHOW_OFFER" }],
-                    [{ text: "💬 Contact Agent (@agsms444)", url: refundUrl }]
-                ]
-            }
-        });
-        return;
-    }
-
-    // Start Command
-    if (text.startsWith('/start')) {
-        delete userSessions[chatId];
-        await sendStartMenu(chatId, msg.from?.first_name || "");
-        return;
-    }
-
-    // Registration Session Flow
-    const session = userSessions[chatId];
-
-    if (!session) {
-        await sendStartMenu(chatId, msg.from?.first_name || "");
-        return;
-    }
-
-    // Registration Step 1: Name
-    if (session.step === 'AWAITING_NAME') {
-        session.data.fullName = text;
-        session.step = 'AWAITING_USERNAME';
-        await bot.sendMessage(chatId, `Got it, *${text}*!\n\nNow, enter your desired *Username*:`, { parse_mode: "Markdown" });
-        return;
-    }
-
-    // Registration Step 2: Username
-    if (session.step === 'AWAITING_USERNAME') {
-        session.data.username = text.replace(/\s+/g, '');
-
-        if (session.data.phone) {
-            await submitAccountCreation(chatId, session);
-        } else {
-            session.step = 'AWAITING_PHONE';
-            await bot.sendMessage(chatId, `Username set to: \`${session.data.username}\`\n\nFinally, enter your *Mobile Number*:`, { parse_mode: "Markdown" });
+        if (lowerText === 'deposit' || lowerText === 'depo' || lowerText === 'ডিপোজিট' || lowerText === '/deposit') {
+            await sendDepositRedirect(chatId);
+            return;
         }
-        return;
-    }
 
-    // Registration Step 3: Phone & Submit
-    if (session.step === 'AWAITING_PHONE') {
-        session.data.phone = text;
-        session.step = 'PROCESSING';
+        if (lowerText.includes('offer') || lowerText.includes('loss') || lowerText.includes('refund') || lowerText.includes('অফার')) {
+            const userAcc = userAccountStore[chatId];
+            const refundUrl = getAgentRedirectUrl('refund', userAcc?.username || "");
+            
+            await bot.sendMessage(chatId, `🎁 *Loss Refund Status*\n\nType /start or click below to check your 12-hour countdown status!`, {
+                parse_mode: "Markdown",
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "⏱️ Check Countdown Status", callback_data: "SHOW_OFFER" }],
+                        [{ text: "💬 Contact Agent (@agsms444)", url: refundUrl }]
+                    ]
+                }
+            });
+            return;
+        }
 
-        await submitAccountCreation(chatId, session);
+        if (text.startsWith('/start')) {
+            delete userSessions[chatId];
+            await sendStartMenu(chatId, msg.from?.first_name || "");
+            return;
+        }
+
+        const session = userSessions[chatId];
+
+        if (!session) {
+            await sendStartMenu(chatId, msg.from?.first_name || "");
+            return;
+        }
+
+        if (session.step === 'AWAITING_NAME') {
+            session.data.fullName = text;
+            session.step = 'AWAITING_USERNAME';
+            await bot.sendMessage(chatId, `Got it, *${text}*!\n\nNow, enter your desired *Username*:`, { parse_mode: "Markdown" });
+            return;
+        }
+
+        if (session.step === 'AWAITING_USERNAME') {
+            session.data.username = text.replace(/\s+/g, '');
+
+            if (session.data.phone) {
+                await submitAccountCreation(chatId, session);
+            } else {
+                session.step = 'AWAITING_PHONE';
+                await bot.sendMessage(chatId, `Username set to: \`${session.data.username}\`\n\nFinally, enter your *Mobile Number*:`, { parse_mode: "Markdown" });
+            }
+            return;
+        }
+
+        if (session.step === 'AWAITING_PHONE') {
+            session.data.phone = text;
+            session.step = 'PROCESSING';
+
+            await submitAccountCreation(chatId, session);
+        }
+    } catch (err) {
+        console.error("Message Handler Error:", err.message);
     }
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection:', reason);
 });
