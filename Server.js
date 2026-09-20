@@ -15,12 +15,15 @@ const AGENT_PASSWORD = process.env.AGENT_PASSWORD || "Sourav123";
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-// Render Environment Variables-e "MASTER_BEARER_TOKEN" nam-e set korte paren (Optional Fallback)
+// Render Environment Variables-e MASTER_BEARER_TOKEN set kora thakle fallback hisebe kaj korbe
 const HARDCODED_MASTER_TOKEN = process.env.MASTER_BEARER_TOKEN || "";
 
 const SERVER_IP = "43.204.42.19";
 const DOMAIN = "ag.sms444.com";
 const BASE_URL = `https://${SERVER_IP}`;
+
+// Deposit Telegram Handle
+const DEPOSIT_TELEGRAM_HANDLE = "@agsms444";
 
 if (!TELEGRAM_TOKEN) {
     console.error("ERROR: TELEGRAM_TOKEN environment variable missing!");
@@ -36,7 +39,7 @@ const api = axios.create({
     rejectUnauthorized: false
 });
 
-// Build Proper Headers matching Browser requests
+// Build Headers
 const getHeaders = (token = null) => {
     const headers = {
         'Host': DOMAIN,
@@ -54,15 +57,12 @@ const getHeaders = (token = null) => {
     return headers;
 };
 
-// Master Login Function with Response-Header & Fallback Token Check
+// Master Auth Token Fetcher
 async function getMasterAuthToken() {
     try {
         console.log("Attempting Master Account Login...");
-        
-        // Step 1: Pre-flight Ping to initialize cookie/session
         await api.get('/ag/', { headers: getHeaders() }).catch(() => {});
 
-        // Step 2: Login Request
         const response = await api.post(
             '/ag/exchange/login',
             {
@@ -72,7 +72,6 @@ async function getMasterAuthToken() {
             { headers: getHeaders() }
         );
 
-        // Extract token from response headers or body
         let token = response.headers['authorization'] || 
                     response.headers['x-auth-token'] || 
                     response.headers['token'];
@@ -92,7 +91,6 @@ async function getMasterAuthToken() {
         console.warn("Live Login Failed:", err.response?.data || err.message);
     }
 
-    // Step 3: Fallback if Live Login fails due to missing auth-tokens
     if (HARDCODED_MASTER_TOKEN) {
         console.log("Using Fallback MASTER_BEARER_TOKEN from Environment Variables...");
         return HARDCODED_MASTER_TOKEN.replace(/^Bearer\s+/i, '');
@@ -152,31 +150,61 @@ async function createAccountAPI(userData, token) {
     }
 }
 
-// Telegram Message Event Listener
+// Deposit Redirect Helper
+async function sendDepositRedirect(chatId) {
+    const messageText = `💳 *Deposit Request*\n\nFor instant deposit and payment details, please contact our official Deposit Desk directly:\n\n👉 *Telegram:* https://t.me/agsms444\n\nClick the button below to message ${DEPOSIT_TELEGRAM_HANDLE}:`;
+    
+    await bot.sendMessage(chatId, messageText, {
+        parse_mode: "Markdown",
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    {
+                        text: "💬 Contact Deposit Desk (@agsms444)",
+                        url: "https://t.me/agsms444"
+                    }
+                ]
+            ]
+        }
+    });
+}
+
+// Telegram Message Handling
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text ? msg.text.trim() : "";
 
     if (!text) return;
 
+    const lowerText = text.toLowerCase();
+
+    // Check for Deposit Keywords or /deposit command
+    if (lowerText === 'deposit' || lowerText === 'depo' || lowerText === 'ডিপোজিট' || lowerText === '/deposit') {
+        await sendDepositRedirect(chatId);
+        return;
+    }
+
+    // Start Flow
     if (text.startsWith('/start')) {
         userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
         await bot.sendMessage(
             chatId, 
-            "Hello! Welcome to SMS444. 🎰\n\nPlease reply with your *Full Name*:", 
+            "Hello! Welcome to SMS444. 🎰\n\nPlease reply with your *Full Name* to create an account, or type *deposit* to add funds:", 
             { parse_mode: "Markdown" }
         );
         return;
     }
 
+    // If session doesn't exist yet
     if (!userSessions[chatId]) {
         userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
-        await bot.sendMessage(chatId, "Please enter your *Full Name* to start creation:", { parse_mode: "Markdown" });
+        await bot.sendMessage(chatId, "Please enter your *Full Name* to start creation (or type *deposit* for deposit info):", { parse_mode: "Markdown" });
         return;
     }
 
     const session = userSessions[chatId];
 
+    // Registration Step 1: Name
     if (session.step === 'AWAITING_NAME') {
         session.data.fullName = text;
         session.step = 'AWAITING_USERNAME';
@@ -184,6 +212,7 @@ bot.on('message', async (msg) => {
         return;
     }
 
+    // Registration Step 2: Username
     if (session.step === 'AWAITING_USERNAME') {
         session.data.username = text.replace(/\s+/g, '');
         session.step = 'AWAITING_PHONE';
@@ -191,6 +220,7 @@ bot.on('message', async (msg) => {
         return;
     }
 
+    // Registration Step 3: Phone & Submit
     if (session.step === 'AWAITING_PHONE') {
         session.data.phone = text;
         session.step = 'PROCESSING';
@@ -204,8 +234,20 @@ bot.on('message', async (msg) => {
             if (createResult.success) {
                 await bot.sendMessage(
                     chatId,
-                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ Log in and change password immediately.`,
-                    { parse_mode: "Markdown" }
+                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ Log in and change password immediately.\n\n💳 *For Deposit:* Type *deposit* or click below to contact ${DEPOSIT_TELEGRAM_HANDLE}`,
+                    {
+                        parse_mode: "Markdown",
+                        reply_markup: {
+                            inline_keyboard: [
+                                [
+                                    {
+                                        text: "💳 Deposit Now (@agsms444)",
+                                        url: "https://t.me/agsms444"
+                                    }
+                                ]
+                            ]
+                        }
+                    }
                 );
             } else {
                 await bot.sendMessage(
@@ -223,3 +265,4 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
+        
