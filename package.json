@@ -1,7 +1,7 @@
 {
-  "name": "telegram-bot",
+  "name": "sms444-telegram-bot",
   "version": "1.0.0",
-  "description": "SMS444 Telegram Bot",
+  "description": "SMS444 Auto Account Creation Telegram Bot",
   "main": "Server.js",
   "scripts": {
     "start": "node Server.js"
@@ -9,6 +9,10 @@
   "dependencies": {
     "axios": "^1.6.8",
     "express": "^4.19.2",
+    "groq-sdk": "^0.3.3",
     "node-telegram-bot-api": "^0.66.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
