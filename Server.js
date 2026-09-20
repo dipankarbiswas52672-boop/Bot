@@ -221,8 +221,7 @@ async function sendStartMenu(chatId, firstName = "") {
 
 🎁 *TODAY'S SPECIAL OFFER:*
 💸 *100% Loss Refund Guarantee!*
-- Account creation-er 12 hours complete hobar por loss refund claim kora jabe.
-
+- You will be eligible to receive the loss refund 12 hours after creating your account.
 👇 *Choose an option below:*`;
 
     const keyboardOptions = [];
