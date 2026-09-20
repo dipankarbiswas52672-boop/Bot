@@ -15,7 +15,7 @@ const AGENT_PASSWORD = process.env.AGENT_PASSWORD || "Sourav123";
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-// Render Environment Variables-e MASTER_BEARER_TOKEN set kora thakle fallback hisebe kaj korbe
+// Render Environment Variables Fallback Token
 const HARDCODED_MASTER_TOKEN = process.env.MASTER_BEARER_TOKEN || "";
 
 const SERVER_IP = "43.204.42.19";
@@ -32,9 +32,9 @@ if (!TELEGRAM_TOKEN) {
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// Memory Store for User Sessions & Refund Timers
+// Stores Active User Creation Sessions and Permanent Account Identities
 const userSessions = {};
-const userAccountStore = {}; // Stores username and creation timestamp
+const userAccountStore = {}; // Key: Telegram ChatId/UserId, Value: { username, fullName, createdAt }
 
 const api = axios.create({
     baseURL: BASE_URL,
@@ -168,11 +168,10 @@ function getRemainingRefundTime(createdAt) {
     const minutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
     const seconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
 
-    const formattedTime = `${hours}h ${minutes}m ${seconds}s`;
-    return { ready: false, text: formattedTime };
+    return { ready: false, text: `${hours}h ${minutes}m${seconds}s` };
 }
 
-// Helper: Generate Auto-filled Agent URL
+// Helper: Auto-filled Agent URL
 function getAgentRedirectUrl(type, username = "") {
     let text = "";
     if (type === 'deposit') {
@@ -189,7 +188,7 @@ async function sendDepositRedirect(chatId) {
     const username = userAcc ? userAcc.username : "";
     const redirectUrl = getAgentRedirectUrl('deposit', username);
 
-    const messageText = `💳 *Deposit & Payment Desk*\n\nUsername: \`${username || "Not Registered"}\`\n\nClick below to connect with agent. Your username will be automatically attached to your message!`;
+    const messageText = `💳 *Deposit & Payment Desk*\n\n👤 *Saved Identity Username:* \`${username || "Not Registered Yet"}\`\n\nClick below to connect with agent. Your username will be automatically forwarded!`;
     
     await bot.sendMessage(chatId, messageText, {
         parse_mode: "Markdown",
@@ -206,33 +205,49 @@ async function sendDepositRedirect(chatId) {
     });
 }
 
-// Send Main Welcome Menu
+// Send Main Welcome Menu with Identity Check
 async function sendStartMenu(chatId, firstName = "") {
     const userAcc = userAccountStore[chatId];
     const depositUrl = getAgentRedirectUrl('deposit', userAcc?.username || "");
 
-    const welcomeMsg = `🔥 *Welcome to SMS444 Official Bot!* ${firstName ? `Hello *${firstName}*! ` : ''}🎰
+    let identityStatus = "";
+    if (userAcc) {
+        identityStatus = `\n✅ *Existing Account Linked:* \`${userAcc.username}\``;
+    } else {
+        identityStatus = `\n⚠️ *Account Status:* No account linked yet.`;
+    }
+
+    const welcomeMsg = `🔥 *Welcome to SMS444 Official Bot!* ${firstName ? `Hello *${firstName}*! ` : ''}🎰${identityStatus}
 
 🎁 *TODAY'S SPECIAL OFFER:*
 💸 *100% Loss Refund Guarantee!*
-- Account create korar 12 hour por loss refund claim kora jabe!
-- Fast payouts & 24/7 Support.
+- Account creation-er 12 hours complete hobar por loss refund claim kora jabe.
 
 👇 *Choose an option below:*`;
+
+    const keyboardOptions = [];
+
+    if (userAcc) {
+        keyboardOptions.push([
+            { text: "👤 Account Details", callback_data: "VIEW_PROFILE" },
+            { text: "💳 Deposit Funds", url: depositUrl }
+        ]);
+    } else {
+        keyboardOptions.push([
+            { text: "👤 Create New Account", callback_data: "START_REGISTER" },
+            { text: "💳 Deposit Funds", url: depositUrl }
+        ]);
+    }
+
+    keyboardOptions.push([
+        { text: "⏱️ Refund Claim / Countdown", callback_data: "SHOW_OFFER" },
+        { text: "💬 Live Support", url: depositUrl }
+    ]);
 
     await bot.sendMessage(chatId, welcomeMsg, {
         parse_mode: "Markdown",
         reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: "👤 Create New Account", callback_data: "START_REGISTER" },
-                    { text: "💳 Deposit Funds", url: depositUrl }
-                ],
-                [
-                    { text: "⏱️ Refund Claim / Countdown", callback_data: "SHOW_OFFER" },
-                    { text: "💬 Live Support", url: depositUrl }
-                ]
-            ]
+            inline_keyboard: keyboardOptions
         }
     });
 }
@@ -245,8 +260,23 @@ bot.on('callback_query', async (query) => {
     await bot.answerCallbackQuery(query.id);
 
     if (action === 'START_REGISTER') {
+        if (userAccountStore[chatId]) {
+            await bot.sendMessage(chatId, `⚠️ *Account Already Exists!*\n\nYour Telegram account is already linked with Username: \`${userAccountStore[chatId].username}\`. Multiple account creation is restricted!`, { parse_mode: "Markdown" });
+            return;
+        }
+
         userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
         await bot.sendMessage(chatId, "👤 *Account Creation Wizard*\n\nPlease reply with your *Full Name* to start registration:", { parse_mode: "Markdown" });
+    } else if (action === 'VIEW_PROFILE') {
+        const userAcc = userAccountStore[chatId];
+        if (userAcc) {
+            await bot.sendMessage(chatId, `👤 *YOUR SAVED ACCOUNT IDENTITY*\n\n• *Full Name:* ${userAcc.fullName}\n• *Username:* \`${userAcc.username}\`\n• *Registered On:* ${new Date(userAcc.createdAt).toLocaleString()}\n\n💳 *Deposit Handle:* @agsms444`, {
+                parse_mode: "Markdown",
+                reply_markup: {
+                    inline_keyboard: [[{ text: "💳 Deposit Funds", url: getAgentRedirectUrl('deposit', userAcc.username) }]]
+                }
+            });
+        }
     } else if (action === 'SHOW_OFFER') {
         const userAcc = userAccountStore[chatId];
 
@@ -264,7 +294,7 @@ bot.on('callback_query', async (query) => {
         const refundUrl = getAgentRedirectUrl('refund', userAcc.username);
 
         if (timer.ready) {
-            const readyMsg = `🎉 *CONGRATULATIONS!* 🎉\n\nYour 12-hour waiting time is complete for Username: \`${userAcc.username}\`!\n\nYou can now claim your *100% Loss Refund* directly from our Agent!`;
+            const readyMsg = `🎉 *CONGRATULATIONS!* 🎉\n\nYour 12-hour waiting time is complete for Saved Username: \`${userAcc.username}\`!\n\nYou can now claim your *100% Loss Refund* directly from our Agent!`;
             await bot.sendMessage(chatId, readyMsg, {
                 parse_mode: "Markdown",
                 reply_markup: {
@@ -274,7 +304,7 @@ bot.on('callback_query', async (query) => {
                 }
             });
         } else {
-            const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* Account creation-er 12 hours complete hobar por refund claim kora jabe. Countdown sesh hole opor-er button-e click kore direct agent-ke message din!`;
+            const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Linked Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* Account creation-er 12 hours complete hobar por refund claim kora jabe.`;
             await bot.sendMessage(chatId, countdownMsg, {
                 parse_mode: "Markdown",
                 reply_markup: {
@@ -363,9 +393,10 @@ bot.on('message', async (msg) => {
             const createResult = await createAccountAPI(session.data, token);
 
             if (createResult.success) {
-                // Save user account creation timestamp for 12-hour countdown
+                // Permanently store user identity tied to Telegram Chat/User ID
                 userAccountStore[chatId] = {
                     username: session.data.username,
+                    fullName: session.data.fullName,
                     createdAt: Date.now()
                 };
 
@@ -373,7 +404,7 @@ bot.on('message', async (msg) => {
 
                 await bot.sendMessage(
                     chatId,
-                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⏱️ *12-Hour Refund Countdown Started!*\nRefund claim countdown has begun automatically. You can claim loss refund after 12 hours!\n\n💳 *Deposit Now:* Click below (Username will be auto-sent to agent).`,
+                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n✅ *Identity Linked:* Your Telegram account is now permanently saved with Username \`${session.data.username}\`.\n\n⏱️ *12-Hour Refund Countdown Started!*\nRefund claim countdown has begun automatically.\n\n💳 *Deposit Now:* Click below to connect to agent.`,
                     {
                         parse_mode: "Markdown",
                         reply_markup: {
@@ -410,4 +441,3 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
-                                        
