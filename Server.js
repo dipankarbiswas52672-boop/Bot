@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const express = require('express');
 
-// Express Server for Render Keep-Alive
+// Express Server for Render
 const app = express();
 const PORT = process.env.PORT || 10000;
 app.get('/', (req, res) => res.send('SMS444 Agent Bot Active'));
@@ -29,18 +29,18 @@ if (!TELEGRAM_TOKEN) {
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// Memory Store for User Registration Steps
+// Memory Store for User Sessions
 const userSessions = {};
 
-// Custom Axios Instance with SSL Ignore & Cookie Persistence
+// Custom Axios Instance
 const api = axios.create({
     baseURL: BASE_URL,
     timeout: 15000,
     rejectUnauthorized: false
 });
 
-// Standard Browsing Headers
-const getHeaders = (token = null, cookie = null) => {
+// Common Request Headers
+const getHeaders = (token = null) => {
     const headers = {
         'Host': DOMAIN,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -51,83 +51,67 @@ const getHeaders = (token = null, cookie = null) => {
     };
 
     if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-        headers['token'] = token;
-    }
-
-    if (cookie) {
-        headers['Cookie'] = cookie;
+        // Correct Bearer Authorization Format
+        headers['Authorization'] = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
     }
 
     return headers;
 };
 
-// Step 1: Master Login & Bearer Token Retrieval
+// Step 1: Login & Extract Bearer Token from Response Headers/Data
 async function getMasterAuthToken() {
     try {
-        console.log("Step 1: Initializing session with target server...");
-        
-        // 1.1 First request to establish initial session/cookies
-        let initResponse;
-        try {
-            initResponse = await api.get('/ag/', {
-                headers: getHeaders()
-            });
-        } catch (e) {
-            // Ignore landing page errors if API endpoints respond
-        }
+        console.log("Logging into Master Account...");
 
-        // Extract Cookies if returned
-        let sessionCookie = "";
-        if (initResponse && initResponse.headers['set-cookie']) {
-            sessionCookie = initResponse.headers['set-cookie'].join('; ');
-        }
-
-        console.log("Step 2: Sending Agent Login Credentials...");
-        
-        // 1.2 Send Login POST Request
-        const loginResponse = await api.post(
+        const response = await api.post(
             '/ag/exchange/login',
             {
                 username: AGENT_USERNAME,
                 password: AGENT_PASSWORD
             },
             {
-                headers: getHeaders(null, sessionCookie)
+                headers: getHeaders()
             }
         );
 
-        // Debug Log
-        console.log("Login Status Code:", loginResponse.status);
+        // 1. Extract Token from Response Headers (Target server sends it here)
+        let token = response.headers['authorization'] || 
+                    response.headers['x-auth-token'] || 
+                    response.headers['token'];
 
-        // 1.3 Extract Token from various possible payload formats
-        const resData = loginResponse.data;
-        const token = resData.token || 
-                      resData.access_token || 
-                      resData.data?.token || 
-                      resData.result?.token ||
-                      resData.meta?.token;
-
-        if (!token) {
-            console.error("Login Response Payload:", JSON.stringify(resData));
-            throw new Error("Token missing from login response payload.");
+        // 2. Fallback: Check Response Body
+        if (!token && response.data) {
+            token = response.data.token || 
+                    response.data.access_token || 
+                    response.data.data?.token || 
+                    response.data.result?.token;
         }
 
-        console.log("Step 3: Master Authorization Token acquired successfully!");
-        return { token, cookie: sessionCookie };
+        if (!token) {
+            console.error("Login Full Response Headers:", JSON.stringify(response.headers));
+            console.error("Login Full Response Data:", JSON.stringify(response.data));
+            throw new Error("Token not found in response headers or body.");
+        }
+
+        // Clean token string if it has 'Bearer ' prefix attached
+        token = token.replace(/^Bearer\s+/i, '');
+
+        console.log("Master Authorization Token Acquired Successfully!");
+        return token;
 
     } catch (err) {
-        console.error("Master Login Error Details:", err.response?.data || err.message);
+        console.error("Master Login Error:", err.response?.data || err.message);
         const errMsg = err.response?.data?.meta?.message || err.response?.data?.message || err.message;
         throw new Error(`Master Login Failed: ${errMsg}`);
     }
 }
 
-// Step 2: Create User Account using acquired Token
-async function createAccountAPI(userData, authData) {
+// Step 2: Create User Account using Bearer Token
+async function createAccountAPI(userData, token) {
     try {
-        console.log(`Step 4: Creating user account for '${userData.username}'...`);
-        
+        console.log(`Creating user account for '${userData.username}'...`);
+
+        // Exact Payload structure matched from your browser log
         const payload = {
             userName: userData.username,
             name: userData.fullName,
@@ -155,20 +139,20 @@ async function createAccountAPI(userData, authData) {
             '/ag/exchange/account/createAccount',
             payload,
             {
-                headers: getHeaders(authData.token, authData.cookie)
+                headers: getHeaders(token)
             }
         );
 
-        if (response.data && (response.data.meta?.status || response.data.status)) {
+        if (response.data && response.data.meta && response.data.meta.status) {
             return { success: true, response: response.data };
         } else {
             return { 
                 success: false, 
-                message: response.data?.meta?.message || response.data?.message || "Account creation failed at server." 
+                message: response.data?.meta?.message || "Account creation rejected by server." 
             };
         }
     } catch (err) {
-        console.error("Create Account Error Details:", err.response?.data || err.message);
+        console.error("Create Account Error:", err.response?.data || err.message);
         return { 
             success: false, 
             message: err.response?.data?.meta?.message || err.response?.data?.message || err.message 
@@ -176,14 +160,13 @@ async function createAccountAPI(userData, authData) {
     }
 }
 
-// Telegram Message Handling
+// Telegram Flow
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text ? msg.text.trim() : "";
 
     if (!text) return;
 
-    // Reset Flow on /start
     if (text.startsWith('/start')) {
         userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
         await bot.sendMessage(
@@ -194,7 +177,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Initialize session if missing
     if (!userSessions[chatId]) {
         userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
         await bot.sendMessage(chatId, "Welcome! Please enter your *Full Name* to start creation:", { parse_mode: "Markdown" });
@@ -203,7 +185,6 @@ bot.on('message', async (msg) => {
 
     const session = userSessions[chatId];
 
-    // Step A: Collect Full Name
     if (session.step === 'AWAITING_NAME') {
         session.data.fullName = text;
         session.step = 'AWAITING_USERNAME';
@@ -211,7 +192,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Step B: Collect Username
     if (session.step === 'AWAITING_USERNAME') {
         const cleanUsername = text.replace(/\s+/g, '');
         session.data.username = cleanUsername;
@@ -220,21 +200,20 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Step C: Collect Phone & Trigger Sequential Flow
     if (session.step === 'AWAITING_PHONE') {
         session.data.phone = text;
         session.step = 'PROCESSING';
 
-        await bot.sendMessage(chatId, "🔐 Logging into Master Account to get access token...");
+        await bot.sendMessage(chatId, "🔐 Logging into Master Account to get Access Token...");
 
         try {
-            // 1. First Master Agent Logins & gets fresh token
-            const authData = await getMasterAuthToken();
+            // Step 1: Login & Get Token
+            const token = await getMasterAuthToken();
             
-            await bot.sendMessage(chatId, "⚡ Token acquired! Creating your account now... ⏳");
+            await bot.sendMessage(chatId, "⚡ Token acquired! Creating your account... ⏳");
 
-            // 2. Uses the newly acquired token to create user ID
-            const createResult = await createAccountAPI(session.data, authData);
+            // Step 2: Pass Token & Create Account
+            const createResult = await createAccountAPI(session.data, token);
 
             if (createResult.success) {
                 await bot.sendMessage(
@@ -258,3 +237,4 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
+    
