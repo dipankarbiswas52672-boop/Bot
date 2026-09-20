@@ -147,7 +147,7 @@ When all 3 are gathered, output this JSON at the very end:
                 { role: 'system', content: systemPrompt },
                 ...session.history
             ],
-            model: 'llama-3.3-70b-versatile',
+            model: 'llama3-70b-8192', // Updated to valid Groq model
             temperature: 0.2
         });
 
@@ -221,4 +221,3 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
-            
