@@ -225,7 +225,7 @@ bot.on('message', async (msg) => {
         session.data.phone = text;
         session.step = 'PROCESSING';
 
-        await bot.sendMessage(chatId, "🔐 Authorizing Master Token & Creating Account...");
+        await bot.sendMessage(chatId, "🔐Creating Account...");
 
         try {
             const token = await getMasterAuthToken();
