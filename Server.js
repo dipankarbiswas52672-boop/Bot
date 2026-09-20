@@ -32,6 +32,16 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 // Memory Store for User Registration Steps
 const userSessions = {};
 
+// Common Headers for Target Server
+const getBaseHeaders = () => ({
+    'Host': DOMAIN,
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json, text/plain, */*',
+    'Origin': `https://${DOMAIN}`,
+    'Referer': `https://${DOMAIN}/`
+});
+
 // Step 1: Login to Master Account & Get Fresh Bearer Token
 async function getMasterAuthToken() {
     try {
@@ -43,24 +53,22 @@ async function getMasterAuthToken() {
                 password: AGENT_PASSWORD
             },
             {
-                headers: {
-                    'Host': DOMAIN,
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json, text/plain, */*'
-                },
+                headers: getBaseHeaders(),
                 rejectUnauthorized: false
             }
         );
 
-        const token = response.data.token || response.data.access_token || response.data.data?.token;
+        const token = response.data.token || response.data.access_token || response.data.data?.token || response.data.result?.token;
+        
         if (!token) {
-            throw new Error("Token missing in response");
+            console.error("Login Response Payload:", JSON.stringify(response.data));
+            throw new Error("Token missing in login response");
         }
+        
         return token;
     } catch (err) {
         console.error("Master Login Error:", err.response?.data || err.message);
-        throw new Error("Master Account Login Failed");
+        throw new Error(err.response?.data?.meta?.message || "Master Account Login Failed");
     }
 }
 
@@ -96,10 +104,7 @@ async function createAccountAPI(userData, token) {
             payload,
             {
                 headers: {
-                    'Host': DOMAIN,
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json, text/plain, */*',
+                    ...getBaseHeaders(),
                     'Authorization': `Bearer ${token}`
                 },
                 rejectUnauthorized: false
@@ -157,7 +162,6 @@ bot.on('message', async (msg) => {
 
     // Step 2: Collect Username
     if (session.step === 'AWAITING_USERNAME') {
-        // Simple cleanup for username (removes spaces if entered)
         const cleanUsername = text.replace(/\s+/g, '');
         session.data.username = cleanUsername;
         session.step = 'AWAITING_PHONE';
@@ -195,7 +199,6 @@ bot.on('message', async (msg) => {
             );
         }
 
-        // Clear session after process
         delete userSessions[chatId];
     }
 });
