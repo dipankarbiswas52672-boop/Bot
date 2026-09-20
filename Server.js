@@ -34,7 +34,7 @@ const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 // Stores Active User Creation Sessions and Permanent Account Identities
 const userSessions = {};
-const userAccountStore = {}; // Key: Telegram ChatId/UserId, Value: { username, fullName, createdAt }
+const userAccountStore = {}; // Key: Telegram ChatId, Value: { username, fullName, createdAt }
 
 const api = axios.create({
     baseURL: BASE_URL,
@@ -205,7 +205,7 @@ async function sendDepositRedirect(chatId) {
     });
 }
 
-// Send Main Welcome Menu with Identity Check
+// Send Main Welcome Menu
 async function sendStartMenu(chatId, firstName = "") {
     const userAcc = userAccountStore[chatId];
     const depositUrl = getAgentRedirectUrl('deposit', userAcc?.username || "");
@@ -250,6 +250,78 @@ async function sendStartMenu(chatId, firstName = "") {
             inline_keyboard: keyboardOptions
         }
     });
+}
+
+// Helper: Attempt to Submit Account Creation with Auto-retry for Username
+async function submitAccountCreation(chatId, session) {
+    await bot.sendMessage(chatId, "🔐 Authorizing Master Token & Creating Account...");
+
+    try {
+        const token = await getMasterAuthToken();
+        const createResult = await createAccountAPI(session.data, token);
+
+        if (createResult.success) {
+            // Permanently store user identity
+            userAccountStore[chatId] = {
+                username: session.data.username,
+                fullName: session.data.fullName,
+                createdAt: Date.now()
+            };
+
+            const depositUrl = getAgentRedirectUrl('deposit', session.data.username);
+
+            await bot.sendMessage(
+                chatId,
+                `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n✅ *Identity Linked:* Your Telegram account is now saved with Username \`${session.data.username}\`.\n\n⏱️ *12-Hour Refund Countdown Started!*\n\n💳 *Deposit Now:* Click below to connect to agent.`,
+                {
+                    parse_mode: "Markdown",
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                {
+                                    text: "💳 Deposit Now (Auto Username)",
+                                    url: depositUrl
+                                }
+                            ],
+                            [
+                                {
+                                    text: "⏱️ Check Refund Countdown",
+                                    callback_data: "SHOW_OFFER"
+                                }
+                            ]
+                        ]
+                    }
+                }
+            );
+
+            delete userSessions[chatId];
+        } else {
+            const errorMsg = createResult.message ? createResult.message.toLowerCase() : "";
+
+            // Handle Username Already Exists (Resume flow from Username prompt)
+            if (errorMsg.includes("already exist") || errorMsg.includes("username") || errorMsg.includes("taken") || errorMsg.includes("duplicate")) {
+                session.step = 'AWAITING_USERNAME'; // Resume flow back to username entry
+                
+                await bot.sendMessage(
+                    chatId,
+                    `⚠️ *Username Unavailable!*\n\nThe username \`${session.data.username}\` is already taken on the server.\n\n👉 *Please type a new unique Username to try again:*`,
+                    { parse_mode: "Markdown" }
+                );
+            } else {
+                await bot.sendMessage(
+                    chatId,
+                    `❌ *Account Creation Failed*\n*Reason:* ${createResult.message}\n\nType /start to try again.`
+                );
+                delete userSessions[chatId];
+            }
+        }
+    } catch (error) {
+        await bot.sendMessage(
+            chatId,
+            `❌ *Process Error:* ${error.message}\n\nType /start to try again.`
+        );
+        delete userSessions[chatId];
+    }
 }
 
 // Handle Inline Keyboard Callbacks
@@ -376,8 +448,14 @@ bot.on('message', async (msg) => {
     // Registration Step 2: Username
     if (session.step === 'AWAITING_USERNAME') {
         session.data.username = text.replace(/\s+/g, '');
-        session.step = 'AWAITING_PHONE';
-        await bot.sendMessage(chatId, `Username: \`${session.data.username}\`\n\nFinally, enter your *Mobile Number*:`, { parse_mode: "Markdown" });
+
+        // If phone already exists from previous attempt, proceed directly to API creation
+        if (session.data.phone) {
+            await submitAccountCreation(chatId, session);
+        } else {
+            session.step = 'AWAITING_PHONE';
+            await bot.sendMessage(chatId, `Username set to: \`${session.data.username}\`\n\nFinally, enter your *Mobile Number*:`, { parse_mode: "Markdown" });
+        }
         return;
     }
 
@@ -386,58 +464,7 @@ bot.on('message', async (msg) => {
         session.data.phone = text;
         session.step = 'PROCESSING';
 
-        await bot.sendMessage(chatId, "🔐 Authorizing Master Token & Creating Account...");
-
-        try {
-            const token = await getMasterAuthToken();
-            const createResult = await createAccountAPI(session.data, token);
-
-            if (createResult.success) {
-                // Permanently store user identity tied to Telegram Chat/User ID
-                userAccountStore[chatId] = {
-                    username: session.data.username,
-                    fullName: session.data.fullName,
-                    createdAt: Date.now()
-                };
-
-                const depositUrl = getAgentRedirectUrl('deposit', session.data.username);
-
-                await bot.sendMessage(
-                    chatId,
-                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n✅ *Identity Linked:* Your Telegram account is now permanently saved with Username \`${session.data.username}\`.\n\n⏱️ *12-Hour Refund Countdown Started!*\nRefund claim countdown has begun automatically.\n\n💳 *Deposit Now:* Click below to connect to agent.`,
-                    {
-                        parse_mode: "Markdown",
-                        reply_markup: {
-                            inline_keyboard: [
-                                [
-                                    {
-                                        text: "💳 Deposit Now (Auto Username)",
-                                        url: depositUrl
-                                    }
-                                ],
-                                [
-                                    {
-                                        text: "⏱️ Check Refund Countdown",
-                                        callback_data: "SHOW_OFFER"
-                                    }
-                                ]
-                            ]
-                        }
-                    }
-                );
-            } else {
-                await bot.sendMessage(
-                    chatId,
-                    `❌ *Account Creation Failed*\n*Reason:* ${createResult.message}\n\nType /start to try again.`
-                );
-            }
-        } catch (error) {
-            await bot.sendMessage(
-                chatId,
-                `❌ *Process Error:* ${error.message}\n\nType /start to try again.`
-            );
-        }
-
-        delete userSessions[chatId];
+        await submitAccountCreation(chatId, session);
     }
 });
+    
