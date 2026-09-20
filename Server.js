@@ -22,8 +22,8 @@ const SERVER_IP = "43.204.42.19";
 const DOMAIN = "ag.sms444.com";
 const BASE_URL = `https://${SERVER_IP}`;
 
-// Telegram Handles
-const DEPOSIT_TELEGRAM_HANDLE = "@agsms444";
+// Telegram Agent Handle (without @ for deep linking)
+const AGENT_TELEGRAM_USER = "agsms444"; 
 
 if (!TELEGRAM_TOKEN) {
     console.error("ERROR: TELEGRAM_TOKEN environment variable missing!");
@@ -31,7 +31,10 @@ if (!TELEGRAM_TOKEN) {
 }
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+
+// Memory Store for User Sessions & Refund Timers
 const userSessions = {};
+const userAccountStore = {}; // Stores username and creation timestamp
 
 const api = axios.create({
     baseURL: BASE_URL,
@@ -150,9 +153,43 @@ async function createAccountAPI(userData, token) {
     }
 }
 
+// Helper: Calculate remaining time for 12 hours
+function getRemainingRefundTime(createdAt) {
+    const twelveHoursMs = 12 * 60 * 60 * 1000;
+    const now = Date.now();
+    const elapsedTime = now - createdAt;
+    const remainingTime = twelveHoursMs - elapsedTime;
+
+    if (remainingTime <= 0) {
+        return { ready: true, text: "00h 00m 00s" };
+    }
+
+    const hours = Math.floor(remainingTime / (1000 * 60 * 60));
+    const minutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
+
+    const formattedTime = `${hours}h ${minutes}m ${seconds}s`;
+    return { ready: false, text: formattedTime };
+}
+
+// Helper: Generate Auto-filled Agent URL
+function getAgentRedirectUrl(type, username = "") {
+    let text = "";
+    if (type === 'deposit') {
+        text = username ? `Hello Agent, I want to deposit funds for Username: ${username}` : `Hello Agent, I want to make a deposit.`;
+    } else if (type === 'refund') {
+        text = username ? `Hello Agent, I want to claim Loss Refund for Username: ${username}` : `Hello Agent, I want to claim Loss Refund.`;
+    }
+    return `https://t.me/${AGENT_TELEGRAM_USER}?text=${encodeURIComponent(text)}`;
+}
+
 // Deposit Redirect Helper
 async function sendDepositRedirect(chatId) {
-    const messageText = `💳 *Deposit & Payment Desk*\n\nFor instant deposit, bonus claims, and payment details, please contact our official Deposit Desk directly:\n\n👉 *Telegram:* https://t.me/agsms444\n\nClick the button below to message ${DEPOSIT_TELEGRAM_HANDLE}:`;
+    const userAcc = userAccountStore[chatId];
+    const username = userAcc ? userAcc.username : "";
+    const redirectUrl = getAgentRedirectUrl('deposit', username);
+
+    const messageText = `💳 *Deposit & Payment Desk*\n\nUsername: \`${username || "Not Registered"}\`\n\nClick below to connect with agent. Your username will be automatically attached to your message!`;
     
     await bot.sendMessage(chatId, messageText, {
         parse_mode: "Markdown",
@@ -160,8 +197,8 @@ async function sendDepositRedirect(chatId) {
             inline_keyboard: [
                 [
                     {
-                        text: "💬 Contact Deposit Desk (@agsms444)",
-                        url: "https://t.me/agsms444"
+                        text: "💬 Contact Agent to Deposit (@agsms444)",
+                        url: redirectUrl
                     }
                 ]
             ]
@@ -169,17 +206,19 @@ async function sendDepositRedirect(chatId) {
     });
 }
 
-// Send Main Welcome Menu with Offers
+// Send Main Welcome Menu
 async function sendStartMenu(chatId, firstName = "") {
+    const userAcc = userAccountStore[chatId];
+    const depositUrl = getAgentRedirectUrl('deposit', userAcc?.username || "");
+
     const welcomeMsg = `🔥 *Welcome to SMS444 Official Bot!* ${firstName ? `Hello *${firstName}*! ` : ''}🎰
 
 🎁 *TODAY'S SPECIAL OFFER:*
 💸 *100% Loss Refund Guarantee!*
-- Play your favorite games today.
-- Get instant Loss Refund back on your deposits!
+- Account create korar 12 hour por loss refund claim kora jabe!
 - Fast payouts & 24/7 Support.
 
-👇 *Choose an option below to get started:*`;
+👇 *Choose an option below:*`;
 
     await bot.sendMessage(chatId, welcomeMsg, {
         parse_mode: "Markdown",
@@ -187,18 +226,18 @@ async function sendStartMenu(chatId, firstName = "") {
             inline_keyboard: [
                 [
                     { text: "👤 Create New Account", callback_data: "START_REGISTER" },
-                    { text: "💳 Deposit / Add Funds", url: "https://t.me/agsms444" }
+                    { text: "💳 Deposit Funds", url: depositUrl }
                 ],
                 [
-                    { text: "🔥 Today's Loss Refund Details", callback_data: "SHOW_OFFER" },
-                    { text: "💬 Live Support (@agsms444)", url: "https://t.me/agsms444" }
+                    { text: "⏱️ Refund Claim / Countdown", callback_data: "SHOW_OFFER" },
+                    { text: "💬 Live Support", url: depositUrl }
                 ]
             ]
         }
     });
 }
 
-// Handle Inline Keyboard Callbacks (Button Clicks)
+// Handle Inline Keyboard Callbacks
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const action = query.data;
@@ -209,29 +248,43 @@ bot.on('callback_query', async (query) => {
         userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
         await bot.sendMessage(chatId, "👤 *Account Creation Wizard*\n\nPlease reply with your *Full Name* to start registration:", { parse_mode: "Markdown" });
     } else if (action === 'SHOW_OFFER') {
-        const offerDetails = `🎁 *TODAY'S LOSS REFUND OFFER DETAILS:*
+        const userAcc = userAccountStore[chatId];
 
-✨ *Offer Highlights:*
-• 💯 *100% Loss Cashback/Refund* on your first deposit games!
-• ⚡ Fast Instant Processing via Deposit Desk.
-• 🔒 Safe & Secure Betting Platform.
+        if (!userAcc) {
+            await bot.sendMessage(chatId, "⚠️ *No Active Account Found!*\n\nPlease create an account first to start the 12-hour Loss Refund Countdown.", {
+                parse_mode: "Markdown",
+                reply_markup: {
+                    inline_keyboard: [[{ text: "👤 Create Account Now", callback_data: "START_REGISTER" }]]
+                }
+            });
+            return;
+        }
 
-👉 *How to Claim:*
-1. Create an account here.
-2. Contact Deposit Desk: https://t.me/agsms444
-3. Mention code: \`LOSS-REFUND-444\``;
+        const timer = getRemainingRefundTime(userAcc.createdAt);
+        const refundUrl = getAgentRedirectUrl('refund', userAcc.username);
 
-        await bot.sendMessage(chatId, offerDetails, {
-            parse_mode: "Markdown",
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: "💳 Claim Offer & Deposit Now", url: "https://t.me/agsms444" },
-                        { text: "👤 Create Account", callback_data: "START_REGISTER" }
+        if (timer.ready) {
+            const readyMsg = `🎉 *CONGRATULATIONS!* 🎉\n\nYour 12-hour waiting time is complete for Username: \`${userAcc.username}\`!\n\nYou can now claim your *100% Loss Refund* directly from our Agent!`;
+            await bot.sendMessage(chatId, readyMsg, {
+                parse_mode: "Markdown",
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "💸 Claim Loss Refund Now (@agsms444)", url: refundUrl }]
                     ]
-                ]
-            }
-        });
+                }
+            });
+        } else {
+            const countdownMsg = `⏱️ *LOSS REFUND COUNTDOWN ACTIVE*\n\n👤 *Username:* \`${userAcc.username}\`\n⏳ *Time Remaining:* \`${timer.text}\`\n\n⚠️ *Rule:* Account creation-er 12 hours complete hobar por refund claim kora jabe. Countdown sesh hole opor-er button-e click kore direct agent-ke message din!`;
+            await bot.sendMessage(chatId, countdownMsg, {
+                parse_mode: "Markdown",
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "🔄 Refresh Countdown Status", callback_data: "SHOW_OFFER" }],
+                        [{ text: "💳 Deposit Funds", url: getAgentRedirectUrl('deposit', userAcc.username) }]
+                    ]
+                }
+            });
+        }
     }
 });
 
@@ -244,18 +297,24 @@ bot.on('message', async (msg) => {
 
     const lowerText = text.toLowerCase();
 
-    // Check for Deposit Keywords or /deposit command
+    // Check for Deposit Keywords
     if (lowerText === 'deposit' || lowerText === 'depo' || lowerText === 'ডিপোজিট' || lowerText === '/deposit') {
         await sendDepositRedirect(chatId);
         return;
     }
 
-    // Check for Offer Keywords
+    // Check for Offer/Refund Keywords
     if (lowerText.includes('offer') || lowerText.includes('loss') || lowerText.includes('refund') || lowerText.includes('অফার')) {
-        await bot.sendMessage(chatId, `🎁 *Today's Special Offer:* 100% Loss Refund Available!\n\nContact Deposit Desk to claim: https://t.me/agsms444`, {
+        const userAcc = userAccountStore[chatId];
+        const refundUrl = getAgentRedirectUrl('refund', userAcc?.username || "");
+        
+        await bot.sendMessage(chatId, `🎁 *Loss Refund Status*\n\nType /start or click below to check your 12-hour countdown status!`, {
             parse_mode: "Markdown",
             reply_markup: {
-                inline_keyboard: [[{ text: "💬 Contact Deposit Desk", url: "https://t.me/agsms444" }]]
+                inline_keyboard: [
+                    [{ text: "⏱️ Check Countdown Status", callback_data: "SHOW_OFFER" }],
+                    [{ text: "💬 Contact Agent (@agsms444)", url: refundUrl }]
+                ]
             }
         });
         return;
@@ -272,7 +331,6 @@ bot.on('message', async (msg) => {
     const session = userSessions[chatId];
 
     if (!session) {
-        // Default fallthrough if not registering
         await sendStartMenu(chatId, msg.from?.first_name || "");
         return;
     }
@@ -305,17 +363,31 @@ bot.on('message', async (msg) => {
             const createResult = await createAccountAPI(session.data, token);
 
             if (createResult.success) {
+                // Save user account creation timestamp for 12-hour countdown
+                userAccountStore[chatId] = {
+                    username: session.data.username,
+                    createdAt: Date.now()
+                };
+
+                const depositUrl = getAgentRedirectUrl('deposit', session.data.username);
+
                 await bot.sendMessage(
                     chatId,
-                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ Log in and change your password immediately.\n\n🎁 *Today's Offer:* Get 100% Loss Refund on your first Deposit!\n💳 *Deposit Handle:* ${DEPOSIT_TELEGRAM_HANDLE}`,
+                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⏱️ *12-Hour Refund Countdown Started!*\nRefund claim countdown has begun automatically. You can claim loss refund after 12 hours!\n\n💳 *Deposit Now:* Click below (Username will be auto-sent to agent).`,
                     {
                         parse_mode: "Markdown",
                         reply_markup: {
                             inline_keyboard: [
                                 [
                                     {
-                                        text: "💳 Claim Loss Refund & Deposit Now",
-                                        url: "https://t.me/agsms444"
+                                        text: "💳 Deposit Now (Auto Username)",
+                                        url: depositUrl
+                                    }
+                                ],
+                                [
+                                    {
+                                        text: "⏱️ Check Refund Countdown",
+                                        callback_data: "SHOW_OFFER"
                                     }
                                 ]
                             ]
@@ -338,3 +410,4 @@ bot.on('message', async (msg) => {
         delete userSessions[chatId];
     }
 });
+                                        
