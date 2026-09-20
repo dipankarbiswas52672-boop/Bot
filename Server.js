@@ -1,24 +1,25 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const express = require('express');
+const { Groq } = require('groq-sdk');
 
-// Express Keep-Alive Server for Render
+// Express Server for Render Keep-Alive
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('SMS444 Agent Bot is Running...'));
+app.get('/', (req, res) => res.send('SMS444 Agent Bot Active'));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 // Environment Variables
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-// Master Credentials
+// Master Account Credentials
 const AGENT_USERNAME = process.env.AGENT_USERNAME || "Bro090";
 const AGENT_PASSWORD = process.env.AGENT_PASSWORD || "Sourav123";
 const MASTER_PASSWORD = process.env.MASTER_PASSWORD || "Sourav123";
 const DEFAULT_USER_PASSWORD = "Abcd1234";
 
-// Server Infrastructure
+// Target Server Configuration
 const SERVER_IP = "43.204.42.19";
 const DOMAIN = "ag.sms444.com";
 const BASE_URL = `https://${SERVER_IP}`;
@@ -29,6 +30,7 @@ if (!TELEGRAM_TOKEN) {
 }
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+const groq = new Groq({ apiKey: GROQ_API_KEY });
 const userSessions = {};
 
 // Step 1: Login to Master Account & Get Fresh Bearer Token
@@ -52,19 +54,18 @@ async function getMasterAuthToken() {
             }
         );
 
-        // Token extract logic
         const token = response.data.token || response.data.access_token || response.data.data?.token;
         if (!token) {
-            throw new Error("Token missing in login response");
+            throw new Error("Token missing in response");
         }
         return token;
     } catch (err) {
-        console.error("Master Login Failed:", err.response?.data || err.message);
+        console.error("Master Login Error:", err.response?.data || err.message);
         throw new Error("Master Account Login Failed");
     }
 }
 
-// Step 2: Create User Account using collected data & Bearer Token
+// Step 2: Create User Account via API
 async function createAccountAPI(userData, token) {
     try {
         console.log(`Creating account for ${userData.username}...`);
@@ -120,7 +121,7 @@ async function createAccountAPI(userData, token) {
     }
 }
 
-// Step 3: Groq AI Dialogue Manager for Collecting User Data
+// Step 3: Handle Groq AI Agent via Official SDK
 async function handleGroqAgent(chatId, userMessage) {
     if (!userSessions[chatId]) {
         userSessions[chatId] = {
@@ -132,43 +133,27 @@ async function handleGroqAgent(chatId, userMessage) {
     const session = userSessions[chatId];
     session.history.push({ role: "user", content: userMessage });
 
-    const systemPrompt = `You are a professional support representative for SMS444.
-Your sole job is to politely collect 3 pieces of information from the customer to register their account:
+    const systemPrompt = `You are an agent for SMS444. Collect 3 pieces of information:
 1. Full Name
 2. Desired Username
 3. Mobile Number
 
-Currently collected data: ${JSON.stringify(session.collected)}
-
-Instructions:
-- Be warm, helpful, and concise.
-- Ask for missing details one at a time.
-- As soon as you have all 3 details (fullName, username, phone), append ONLY this exact JSON object at the very end of your response:
+When all 3 are gathered, output this JSON at the very end:
 {"status": "COMPLETE", "fullName": "...", "username": "...", "phone": "..."}`;
 
     try {
-        const response = await axios.post(
-            'https://api.groq.com/openai/v1/chat/completions',
-            {
-                model: 'llama-3.3-70b-versatile',
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    ...session.history
-                ],
-                temperature: 0.2
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${GROQ_API_KEY}`,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                ...session.history
+            ],
+            model: 'llama-3.3-70b-versatile',
+            temperature: 0.2
+        });
 
-        const aiReply = response.data.choices[0].message.content;
+        const aiReply = chatCompletion.choices[0]?.message?.content || "";
         session.history.push({ role: "assistant", content: aiReply });
 
-        // Check if data collection is complete
         const jsonMatch = aiReply.match(/\{"status":\s*"COMPLETE".*?\}/s);
         if (jsonMatch) {
             const parsedData = JSON.parse(jsonMatch[0]);
@@ -179,12 +164,12 @@ Instructions:
         return { isComplete: false, replyText: aiReply };
 
     } catch (err) {
-        console.error("Groq AI Error:", err.message);
-        return { isComplete: false, replyText: "I missed that. Could you please state the detail again?" };
+        console.error("Groq SDK Error:", err.message);
+        return { isComplete: false, replyText: "I couldn't process that properly. Could you re-enter the info?" };
     }
 }
 
-// Telegram Event Handler
+// Telegram Message Handling
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text ? msg.text.trim() : "";
@@ -201,22 +186,17 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Chat with Groq Agent
     const agentRes = await handleGroqAgent(chatId, text);
 
     if (agentRes.replyText) {
         await bot.sendMessage(chatId, agentRes.replyText);
     }
 
-    // Trigger API Execution Workflow when all data is gathered
     if (agentRes.isComplete) {
-        await bot.sendMessage(chatId, "Great! Authenticating with Master Account & creating your user ID... ⏳");
+        await bot.sendMessage(chatId, "Authenticating Master Account & Creating ID... ⏳");
 
         try {
-            // 1. Get Master Auth Token
             const token = await getMasterAuthToken();
-
-            // 2. Post User Creation
             const createResult = await createAccountAPI(agentRes.data, token);
 
             if (createResult.success) {
@@ -234,10 +214,11 @@ bot.on('message', async (msg) => {
         } catch (error) {
             await bot.sendMessage(
                 chatId,
-                `❌ *Process Error:* ${error.message}. Please try again later.`
+                `❌ *Process Error:* ${error.message}. Please try again.`
             );
         }
 
         delete userSessions[chatId];
     }
 });
+            
