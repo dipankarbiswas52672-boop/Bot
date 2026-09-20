@@ -10,7 +10,6 @@ app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 // Environment Variables
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 // Master Account Credentials
 const AGENT_USERNAME = process.env.AGENT_USERNAME || "Bro090";
@@ -29,6 +28,8 @@ if (!TELEGRAM_TOKEN) {
 }
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+
+// Memory Store for User Registration Steps
 const userSessions = {};
 
 // Step 1: Login to Master Account & Get Fresh Bearer Token
@@ -119,114 +120,82 @@ async function createAccountAPI(userData, token) {
     }
 }
 
-// Step 3: Handle Groq AI Agent via Direct Axios Call
-async function handleGroqAgent(chatId, userMessage) {
-    if (!userSessions[chatId]) {
-        userSessions[chatId] = {
-            history: [],
-            collected: { fullName: null, username: null, phone: null }
-        };
-    }
-
-    const session = userSessions[chatId];
-    session.history.push({ role: "user", content: userMessage });
-
-    const systemPrompt = `You are a registration assistant for SMS444. Collect 3 pieces of information:
-1. Full Name
-2. Desired Username
-3. Mobile Number
-
-Be friendly and ask one missing detail at a time.
-When ALL 3 details are collected, add ONLY this JSON at the very end of your reply:
-{"status": "COMPLETE", "fullName": "...", "username": "...", "phone": "..."}`;
-
-    try {
-        const response = await axios.post(
-            'https://api.groq.com/openai/v1/chat/completions',
-            {
-                model: 'llama-3.1-8b-instant', // Active supported model
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    ...session.history
-                ],
-                temperature: 0.2
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${GROQ_API_KEY}`,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-
-        const aiReply = response.data.choices[0].message.content;
-        session.history.push({ role: "assistant", content: aiReply });
-
-        const jsonMatch = aiReply.match(/\{"status":\s*"COMPLETE".*?\}/s);
-        if (jsonMatch) {
-            const parsedData = JSON.parse(jsonMatch[0]);
-            const cleanText = aiReply.replace(jsonMatch[0], '').trim();
-            return { isComplete: true, data: parsedData, replyText: cleanText };
-        }
-
-        return { isComplete: false, replyText: aiReply };
-
-    } catch (err) {
-        console.error("Groq AI API Error:", err.response?.data || err.message);
-        return { isComplete: false, replyText: "Could you please re-type that detail again?" };
-    }
-}
-
-// Telegram Message Handling
+// Telegram Message Processing
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text ? msg.text.trim() : "";
 
     if (!text) return;
 
+    // Reset Flow on /start
     if (text.startsWith('/start')) {
-        delete userSessions[chatId];
+        userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
         await bot.sendMessage(
             chatId, 
-            "Hello! Welcome to SMS444. 🎰\n\nI can help you create your account right away. May I have your *Full Name*?", 
+            "Hello! Welcome to SMS444. 🎰\n\nI will help you create your account right away.\n\nPlease reply with your *Full Name*:", 
             { parse_mode: "Markdown" }
         );
         return;
     }
 
-    const agentRes = await handleGroqAgent(chatId, text);
-
-    if (agentRes.replyText) {
-        await bot.sendMessage(chatId, agentRes.replyText);
+    // Initialize session if missing
+    if (!userSessions[chatId]) {
+        userSessions[chatId] = { step: 'AWAITING_NAME', data: {} };
+        await bot.sendMessage(chatId, "Welcome! Please enter your *Full Name* to start creation:", { parse_mode: "Markdown" });
+        return;
     }
 
-    if (agentRes.isComplete) {
+    const session = userSessions[chatId];
+
+    // Step 1: Collect Name
+    if (session.step === 'AWAITING_NAME') {
+        session.data.fullName = text;
+        session.step = 'AWAITING_USERNAME';
+        await bot.sendMessage(chatId, `Got it, *${text}*!\n\nNow, please enter your desired *Username*:`, { parse_mode: "Markdown" });
+        return;
+    }
+
+    // Step 2: Collect Username
+    if (session.step === 'AWAITING_USERNAME') {
+        // Simple cleanup for username (removes spaces if entered)
+        const cleanUsername = text.replace(/\s+/g, '');
+        session.data.username = cleanUsername;
+        session.step = 'AWAITING_PHONE';
+        await bot.sendMessage(chatId, `Username set to \`${cleanUsername}\`.\n\nFinally, please provide your *Mobile Number*:`, { parse_mode: "Markdown" });
+        return;
+    }
+
+    // Step 3: Collect Phone & Submit API
+    if (session.step === 'AWAITING_PHONE') {
+        session.data.phone = text;
+        session.step = 'PROCESSING';
+
         await bot.sendMessage(chatId, "Authenticating Master Account & Creating ID... ⏳");
 
         try {
             const token = await getMasterAuthToken();
-            const createResult = await createAccountAPI(agentRes.data, token);
+            const createResult = await createAccountAPI(session.data, token);
 
             if (createResult.success) {
                 await bot.sendMessage(
                     chatId,
-                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${agentRes.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Log in and change your password immediately.`,
+                    `🎉 *Account Created Successfully!*\n\n🌐 *URL:* https://sms444.com\n👤 *Username:* \`${session.data.username}\`\n🔑 *Password:* \`${DEFAULT_USER_PASSWORD}\`\n\n⚠️ *Important:* Log in and change your password immediately.`,
                     { parse_mode: "Markdown" }
                 );
             } else {
                 await bot.sendMessage(
                     chatId,
-                    `❌ *Account Creation Failed*\n*Reason:* ${createResult.message}`
+                    `❌ *Account Creation Failed*\n*Reason:* ${createResult.message}\n\nType /start to try again.`
                 );
             }
         } catch (error) {
             await bot.sendMessage(
                 chatId,
-                `❌ *Process Error:* ${error.message}. Please try again.`
+                `❌ *Process Error:* ${error.message}. Type /start to try again.`
             );
         }
 
+        // Clear session after process
         delete userSessions[chatId];
     }
 });
-    
